@@ -38,8 +38,22 @@ Offset | Length    | Contents
 ------ | :-------: | --------
 0x00   | 1         | `0xb2` *header byte*
 0x01   | 1         | Entry length (number of bytes - includes header byte)
-0x02   | 4         | *timestamp?* (unsure of format - not a straight translation to epoch)
-0x06   | 1         | `0x55` *delimeter*
+0x02   | 1         | Entry type - see table below
+0x03   | 4         | Timestamp - Epoch, little endian *(local time)*
 0x07   | *variabe* | Log message
+
+## Log file entry types
+
+Value | Description             | Format
+----- | ----------------------- | ------
+0x09  | *key on*?               | key_state
+0x28  | *can link*?             |
+0x33  | *battery module*?       | 
+0x34  | *power on*?             | power_state *source?*
+0x36  | Sevcon power state      | state
+0x39  | *unknown*               |
+0x3d  | Sevcon contactor state  | 
+0x3e  | *cell voltages*?        | 
+0xfd  | Debug string            | 
 
 
