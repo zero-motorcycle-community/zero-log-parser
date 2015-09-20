@@ -15,8 +15,11 @@ Address    | Length | Contents
 0x0000027b | 2      | Firmware revision
 0x0000027c | 2      | Board revision
 0x00000400 | 4      | `0xa3 0xa3 0xa3 0xa3` *(header / seperator?)*
-0x00000600 | 4      | `0xa2 0xa2 0xa2 0xa2` *(header / seperator?)*
-0x00000604 |        | Main log begins
+0x00000600 | 4      | `0xa2 0xa2 0xa2 0xa2` Log entries header
+0x00000604 | 4      | Log entries end address
+0x00000608 | 4      | Log entries start address
+0x0000060c | 2      | Log entries count
+
 
 
 
