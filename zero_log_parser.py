@@ -13,30 +13,42 @@ Usage:
 
 '''
 
-
 import argparse
 import os
-import codecs
+import mmap
+import struct
 
 
-def bytes_from_file(filename, chunksize=8192):
+class LogFile:
     '''
-    Generator for performing a chunked read from a binary file
+    Wrapper for our raw log file
     '''
-    with open(filename, 'rb') as f:
-        while True:
-            chunk = f.read(chunksize)
-            if chunk:
-                for b in chunk:
-                    yield b
-            else:
-                break
+
+    def __init__(self, file_path):
+        with open(file_path, 'rb') as f:
+            m = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
+            self._data = bytearray(m)
+
+    def get_bytes(self, address, length):
+        return self._data[address:address+length]
+
+    def get_byte(self, address):
+        return self._data[address]
+
+    def get_short(self, address):
+        return struct.unpack_from('<H', self._data, address)[0]
+
+    def get_long(self, address):
+        return struct.unpack_from('<L', self._data, address)[0]
+
+    def get_string(self, address, length):
+        return struct.unpack_from('{}s'.format(length), self._data, address)[0]
 
 
 def parse_log_entry(bytes):
     '''
     Parse a list of bytes associated with an individual line / log entry into a
-    human readable string.
+    human readable string
     '''
     header = bytes[:6]
     msg = bytes[6:-1]
@@ -50,7 +62,33 @@ def parse_log_entry(bytes):
 
 def parse_log(bin_file, output):
     '''
-    Parse a Zero binary log file into a human readable text file.
+    Parse a Zero binary log file into a human readable text file
+    '''
+    log = LogFile(bin_file)
+
+    sys_info = {
+        'serial': log.get_string(0x200, 21),
+        'vin': log.get_string(0x240, 17),
+        'firmware': log.get_short(0x27b),
+        'board_rev': log.get_short(0x27d)
+    }
+
+    num_entries = log.get_short(0x60c)
+
+    with open(output, 'w') as f:
+        f.write('# Zero MBB log\n')
+        f.write('\n')
+        f.write('Serial number:    {serial}\n'.format(**sys_info))
+        f.write('VIN:              {vin}\n'.format(**sys_info))
+        f.write('Firmware Rev.:    {firmware}\n'.format(**sys_info))
+        f.write('Board Rev.:       {board_rev}\n'.format(**sys_info))
+        f.write('\n')
+        f.write('---')
+        f.write('\n')
+
+    print 'Saved to {}'.format(output_file)
+
+
     '''
     ENTRY_DELIMITER = 0xb2
 
@@ -64,6 +102,7 @@ def parse_log(bin_file, output):
                 print(parse_log_entry(buff))
                 f.write(parse_log_entry(buff) + '\n')
                 buff = []
+    '''
 
 
 if __name__ == '__main__':
