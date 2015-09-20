@@ -1,3 +1,5 @@
+*note: values in raw logs are little endian*
+
 # MBB log file layout
 
 Address    | Length | Contents                                      
@@ -39,9 +41,9 @@ Address    | Length | Contents
 Offset | Length    | Contents                                      
 ------ | :-------: | --------
 0x00   | 1         | `0xb2` *header byte*
-0x01   | 1         | Entry length (number of bytes - includes header byte)
+0x01   | 1         | Entry length (includes header byte)
 0x02   | 1         | Entry type - see table below
-0x03   | 4         | Timestamp - Epoch, little endian *(local time)*
+0x03   | 4         | Timestamp (epoch)
 0x07   | *variabe* | Log message
 
 ## Log file entry types
