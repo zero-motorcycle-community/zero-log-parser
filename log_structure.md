@@ -12,7 +12,7 @@ Address    | Length | Contents
 0x00000240 | 17     | VIN number
 0x00000257 | 4      | `0xa0 0xa0 0xa0 0xa0` *(header / seperator?)*
 0x0000025b | 20     | *Date / time - unknown, but close to time @ 0x0000002a*
-0x0000027b | 2      | Firmware revision
+0x0000027a | 2      | Firmware revision
 0x0000027c | 2      | Board revision
 0x00000400 | 4      | `0xa3 0xa3 0xa3 0xa3` *(header / seperator?)*
 0x00000600 | 4      | `0xa2 0xa2 0xa2 0xa2` Log entries header
