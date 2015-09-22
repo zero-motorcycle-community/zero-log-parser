@@ -83,7 +83,8 @@ def parse_entry(raw_entry):
     entry_data = raw_entry[0x6:length]
 
     if entry_type == 0xfd:
-        message = str(entry_data[:-1])
+        message = BinaryTools.unpack('char', entry_data, 0x0,
+                                     length=len(entry_data) - 1)
     else:
         message = ' '.join(['0x{:02x}'.format(c) for c in entry_data])
 
