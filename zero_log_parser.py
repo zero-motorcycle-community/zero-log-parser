@@ -65,7 +65,7 @@ class LogFile:
                                   length=length)
 
     def extract(self, start_address, end_address):
-        return self._data[start_address: end_address]
+        return self._data[start_address:end_address]
 
 
 def parse_entry(raw_entry):
