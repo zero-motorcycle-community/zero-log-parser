@@ -67,6 +67,21 @@ Offset | Length | Contents
 ### `0x2b` -CAN ACK error
 *(no additional data)*
 
+### `0x2c` - Riding / run status
+Offset | Length | Contents                                      
+------ | :----: | --------
+0x00   | 1      | pack temp (high)
+0x01   | 1      | pack temp (low)
+0x02   | 2      | pack state of charge (%)
+0x04   | 4      | pack voltage - fixed point, scaling factor 1/1000
+0x08   | 1      | motor temp
+0x0a   | 1      | controller temp
+0x0c   | 2      | motor RPM
+0x10   | 1      | battery current
+0x13   | 1      | motor current
+
+*note: all temperatures in degrees celcius*
+
 ### `0x33` - battery status
 Offset | Length | Contents                                      
 ------ | :----: | --------
