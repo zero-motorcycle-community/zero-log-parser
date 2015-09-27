@@ -37,7 +37,8 @@ class BinaryTools:
         'uint64':   'Q',
         'float':    'f',
         'double':   'd',
-        'char':     's'
+        'char':     's',
+        'bool':     '?'
     }
 
     @staticmethod
@@ -75,26 +76,117 @@ def parse_entry(log, address):
     header = log.unpack('char', 0x0, offset=address)
     if header != b'\xb2':
         raise ValueError('Invalid entry header byte')
-
     length = log.unpack('uint8', 0x1, offset=address)
-
-    entry_type = log.unpack('uint8', 0x2, offset=address)
-
+    message_type = log.unpack('uint8', 0x2, offset=address)
     timestamp = log.unpack('uint32', 0x3, offset=address)
-    # There's some odd entries in our time field occasional, filter them
-    entry_time = localtime(timestamp) if timestamp > 0xfff else None
+    message = log.extract(0x7, length - 0x7, offset=address)
 
-    entry_data = log.extract(0x7, length - 0x7, offset=address)
+    def debug_message(x):
+        return BinaryTools.unpack('char', x, 0x0, count=len(x) - 1)
 
-    if entry_type == 0xfd:
-        message = BinaryTools.unpack('char', entry_data, 0x0,
-                                     count=len(entry_data) - 1)
-    else:
-        message = ' '.join(['0x{:02x}'.format(c) for c in entry_data])
+    def key_state(x):
+        fields = {
+            'state': 'on' if BinaryTools.unpack('bool', x, 0x0) else 'off'
+        }
+        return 'Key {state}'.format(**fields)
+
+    def battery_can_link_up(x):
+        fields = {
+            'module': BinaryTools.unpack('uint8', x, 0x0)
+        }
+        return 'Module {module:02} CAN link up'.format(**fields)
+
+    def sevcon_can_link_up(x):
+        return 'Sevcon CAN link up'
+
+    def can_ack_error(x):
+        return 'CAN ACK error'
+
+    def run_status(x):
+        fields = {
+            'pack_temp_hi': BinaryTools.unpack('uint8', x, 0x0),
+            'pack_temp_low': BinaryTools.unpack('uint8', x, 0x1),
+            'soc': BinaryTools.unpack('uint16', x, 0x2),
+            'pack_voltage': BinaryTools.unpack('uint32', x, 0x4) / 1000.0,
+            'motor_temp': BinaryTools.unpack('uint8', x, 0x8),
+            'controller_temp': BinaryTools.unpack('uint8', x, 0xa),
+            'rpm': BinaryTools.unpack('uint16', x, 0xc),
+            'battery_current': BinaryTools.unpack('uint8', x, 0x10),
+            'motor_current': BinaryTools.unpack('uint8', x, 0x13),
+        }
+        return 'Riding - ' \
+            'pack: h {pack_temp_hi}C, l {pack_temp_low}C, {pack_voltage:03.3f}V, {soc}% SOC | ' \
+            'motor: {motor_temp}C, {rpm}rpm | '\
+            'controller: {controller_temp}C, | '\
+            'power delivery: battery {battery_current}A, motor {motor_current}A'.format(**fields)
+
+    def battery_status(x):
+        states = {
+            0x00: 'disconnecting',
+            0x01: 'connecting',
+            0x02: 'registered'
+        }
+
+        fields = {
+            'state': states.get(BinaryTools.unpack('uint8', x, 0x0)),
+            'module': BinaryTools.unpack('uint8', x, 0x1),
+            'modvolt': BinaryTools.unpack('uint32', x, 0x2) / 1000.0,
+            'sysmax': BinaryTools.unpack('uint32', x, 0x6) / 1000.0,
+            'sysmin': BinaryTools.unpack('uint32', x, 0xa) / 1000.0
+        }
+        return 'Battery module {module:02} {state} ('\
+            'module: {modvolt:03.3f}V, '\
+            'system max: {sysmax:03.3f}V, '\
+            'system min: {sysmin:03.3f}V'\
+            ')'.format(**fields)
+
+    def power_state(x):
+        sources = {
+            0x01: 'key switch',
+            0x04: 'onboard charger'
+        }
+
+        fields = {
+            'state': 'on' if BinaryTools.unpack('bool', x, 0x0) else 'off',
+            'source': sources.get(BinaryTools.unpack('uint8', x, 0x1))
+        }
+
+        return 'Power {state} ({source})'.format(**fields)
+
+    def sevcon_power_state(x):
+        is_on = BinaryTools.unpack('bool', x, 0x0)
+        return 'Sevcon power {}'.format('on' if is_on else 'off')
+
+    def battery_discharge_current_limited(x):
+        limit = BinaryTools.unpack('uint16', x, 0x0)
+        return 'Battery discharge current limited to {}A'.format(limit)
+
+    def battery_contactor_closed(x):
+        module = BinaryTools.unpack('uint8', x, 0x0)
+        return 'Battery module {:02} contactor closed'.format(module)
+
+    def unhandled_entry_format(x):
+        return ' '.join(['0x{:02x}'.format(c) for c in x])
+
+    parsers = {
+        0x09: key_state,
+        0x28: battery_can_link_up,
+        0x2a: sevcon_can_link_up,
+        0x2b: can_ack_error,
+        0x2c: run_status,
+        0x33: battery_status,
+        0x34: power_state,
+        0x36: sevcon_power_state,
+        0x39: battery_discharge_current_limited,
+        0x3d: battery_contactor_closed,
+        0xfd: debug_message
+    }
+    entry_parser = parsers.get(message_type, unhandled_entry_format)
 
     entry = {
-        'time':     entry_time,
-        'message':  message
+        # There's some odd entries in our time field occasional, filter them
+        'time': localtime(timestamp) if timestamp > 0xfff else None,
+        'message': entry_parser(message)
     }
 
     return (length, entry)
