@@ -41,9 +41,9 @@ class BinaryTools:
     }
 
     @staticmethod
-    def unpack(type_name, buff, address, length=1):
+    def unpack(type_name, buff, address, count=1):
         type_char = BinaryTools.TYPES[type_name.lower()]
-        type_format = '<{}{}'.format(length, type_char)
+        type_format = '<{}{}'.format(count, type_char)
         return struct.unpack_from(type_format, buff, address)[0]
 
 
@@ -60,35 +60,44 @@ class LogFile:
     def index(self, sequence):
         return self._data.index(sequence)
 
-    def unpack(self, type_name, address, length=1, offset=0):
+    def unpack(self, type_name, address, count=1, offset=0):
         return BinaryTools.unpack(type_name, self._data, address + offset,
-                                  length=length)
+                                  count=count)
 
-    def extract(self, start_address, end_address):
-        return self._data[start_address:end_address]
+    def extract(self, start_address, length, offset=0):
+        return self._data[start_address+offset:start_address+length+offset]
 
 
-def parse_entry(raw_entry):
+def parse_entry(log, address):
     '''
     Parse an individual entry from a LogFile into a human readable form
     '''
-    length = BinaryTools.unpack('uint8', raw_entry, 0x0)
+    header = log.unpack('char', 0x0, offset=address)
+    if header != b'\xb2':
+        raise ValueError('Invalid entry header byte')
 
-    entry_type = BinaryTools.unpack('uint8', raw_entry, 0x1)
+    length = log.unpack('uint8', 0x1, offset=address)
 
-    timestamp = BinaryTools.unpack('uint32', raw_entry, 0x2)
+    entry_type = log.unpack('uint8', 0x2, offset=address)
+
+    timestamp = log.unpack('uint32', 0x3, offset=address)
     # There's some odd entries in our time field occasional, filter them
     entry_time = localtime(timestamp) if timestamp > 0xfff else None
 
-    entry_data = raw_entry[0x6:length]
+    entry_data = log.extract(0x7, length - 0x7, offset=address)
 
     if entry_type == 0xfd:
         message = BinaryTools.unpack('char', entry_data, 0x0,
-                                     length=len(entry_data) - 1)
+                                     count=len(entry_data) - 1)
     else:
         message = ' '.join(['0x{:02x}'.format(c) for c in entry_data])
 
-    return (entry_time, message)
+    entry = {
+        'time':     entry_time,
+        'message':  message
+    }
+
+    return (length, entry)
 
 
 def parse_log(bin_file, output):
@@ -100,8 +109,8 @@ def parse_log(bin_file, output):
     log = LogFile(bin_file)
 
     sys_info = OrderedDict()
-    sys_info['Serial number'] = log.unpack('char', 0x200, length=21)
-    sys_info['VIN'] = log.unpack('char', 0x240, length=17)
+    sys_info['Serial number'] = log.unpack('char', 0x200, count=21)
+    sys_info['VIN'] = log.unpack('char', 0x240, count=17)
     sys_info['Firmware rev.'] = log.unpack('uint16', 0x27b)
     sys_info['Board rev.'] = log.unpack('uint16', 0x27d)
 
@@ -109,8 +118,6 @@ def parse_log(bin_file, output):
     entries_end = log.unpack('uint32', 0x4, offset=entries_header_idx)
     entries_start = log.unpack('uint32', 0x8, offset=entries_header_idx)
     entries_count = log.unpack('uint32', 0xc, offset=entries_header_idx)
-    raw_entries = log.extract(entries_start+1, entries_end).split(b'\xb2')
-    entries = map(parse_entry, raw_entries)
 
     print '{} entries found'.format(entries_count)
 
@@ -124,14 +131,18 @@ def parse_log(bin_file, output):
         f.write('---\n')
         f.write('\n')
 
-        for item, entry in enumerate(entries):
+        read_pos = entries_start
+        for entry_num in range(entries_count):
+            (length, entry) = parse_entry(log, read_pos)
+
             fields = {
-                'line': item + 1,
-                'time': strftime('[%Y-%m-%d %H:%M:%S]', entry[0]) if entry[0]
-                else '',
-                'message': entry[1]
+                'entry': entry_num + 1,
+                'time': strftime('%Y-%m-%d %H:%M:%S', entry['time']) if entry['time'] else '',
+                'message': entry['message']
             }
-            f.write('{line:05d} {time:19s} {message}\n'.format(**fields))
+            f.write('{entry:05d}  {time:19s}  {message}\n'.format(**fields))
+
+            read_pos += length
 
         f.write('\n')
 
