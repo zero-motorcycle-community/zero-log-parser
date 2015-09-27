@@ -56,10 +56,13 @@ Offset | Length | Contents
 ------ | :----: | --------
 0x00   | 1      | state
 
-### `0x28` - CAN link up
+### `0x28` - battery CAN link up
 Offset | Length | Contents                                      
 ------ | :----: | --------
 0x00   | 1      | module number
+
+### `0x2a` - Sevcon CAN link up
+*(no additional data)*
 
 ### `0x33` - battery status
 Offset | Length | Contents                                      
