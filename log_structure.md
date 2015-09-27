@@ -64,6 +64,9 @@ Offset | Length | Contents
 ### `0x2a` - Sevcon CAN link up
 *(no additional data)*
 
+### `0x2b` -CAN ACK error
+*(no additional data)*
+
 ### `0x33` - battery status
 Offset | Length | Contents                                      
 ------ | :----: | --------
