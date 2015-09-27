@@ -45,22 +45,55 @@ Offset | Length    | Contents
 ------ | :-------: | --------
 0x00   | 1         | `0xb2` *header byte*
 0x01   | 1         | Entry length (includes header byte)
-0x02   | 1         | Entry type - see table below
+0x02   | 1         | Entry type - see following section
 0x03   | 4         | Timestamp (epoch)
 0x07   | *variabe* | Log message
 
 ## Log file entry types
 
-Value | Description             | Format
------ | ----------------------- | ------
-0x09  | *key on*?               | key_state
-0x28  | *can link*?             |
-0x33  | *battery module*?       | 
-0x34  | *power on*?             | power_state *source?*
-0x36  | Sevcon power state      | state
-0x39  | *unknown*               |
-0x3d  | Sevcon contactor state  | 
-0x3e  | *cell voltages*?        | 
-0xfd  | Debug string            | 
+### `0x09` - key state
+Offset | Length | Contents                                      
+------ | :----: | --------
+0x00   | 1      | state
 
+### `0x28` - CAN link up
+Offset | Length | Contents                                      
+------ | :----: | --------
+0x00   | 1      | module number
 
+### `0x33` - battery status
+Offset | Length | Contents                                      
+------ | :----: | --------
+0x00   | 1      | `0x00`=disconnecting, `0x01`=connecting, `0x02`=registered
+0x01   | 1      | module number
+0x02   | 4      | module voltage - fixed point, scaling factor 1/1000
+0x06   | 4      | maximum system voltage - fixed point, scaling factor 1/1000
+0x0a   | 4      | minimum system voltage - fixed point, scaling factor 1/1000
+
+### `0x34` - power state
+Offset | Length | Contents                                      
+------ | :----: | --------
+0x00   | 1      | state
+0x01   | 1      | `0x01`=key switch, `0x04`=onboard charger
+
+### `0x36` - Sevcon power state
+Offset | Length | Contents                                      
+------ | :----: | --------
+0x00   | 1      | state
+
+### `0x39` - battery discharge current limited
+Offset | Length | Contents                                      
+------ | :----: | --------
+0x00   | 2      | discharge current
+
+### `0x3d` - battery module contactor closed
+Offset | Length | Contents                                      
+------ | :----: | --------
+0x00   | 1      | module number
+
+### `0x3e` - *cell voltages?*
+
+### `0xfd` - debug string
+Offset | Length     | Contents                                      
+------ | :--------: | --------
+0x00   | *variable* | message text (ascii)
