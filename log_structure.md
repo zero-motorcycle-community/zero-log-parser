@@ -10,19 +10,19 @@ Address    | Length | Contents
 0x00000240 | 17     | VIN number
 0x0000027b | 1      | Firmware revision
 0x0000027d | 1      | Board revision
-0x0000027f | 2      | Bike model (`SS` | `SR` | `DS` | *FX?*)
+0x0000027f | 2      | Bike model (`SS`, `SR`, `DS`, *FX?*)
 
 
 ## Log sections (located by header sequence)
 
-### Unknown *build date?*
+### Unknown *(build date?)*
 
 Offset     | Length | Contents                                      
 ---------- | :----: | --------
 0x00000000 | 4      | `0xa0 0xa0 0xa0 0xa0` section header
 0x00000004 | 20     | Date and time (ascii)
 
-### Unknown *first run date?*
+### Unknown *(first run date?)*
 
 Offset     | Length | Contents                                      
 ---------- | :----: | --------
