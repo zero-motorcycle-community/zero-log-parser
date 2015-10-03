@@ -1,29 +1,56 @@
+# MBB log file layout 
+
 *note: values in raw logs are little endian*
 
-# MBB log file layout
+## Static addresses
 
 Address    | Length | Contents                                      
 ---------- | :----: | --------
-0x00000000 | 3      | `MBB`
-0x00000004 | 2      | `0xac 0x4e`
-0x00000026 | 4      | `0xa1 0xa1 0xa1 0xa1` *(header / seperator?)*
-0x0000002a | 20     | *First run date?*
 0x00000200 | 21     | Serial number
 0x00000240 | 17     | VIN number
-0x00000257 | 4      | `0xa0 0xa0 0xa0 0xa0` *(header / seperator?)*
-0x0000025b | 20     | *Date / time - unknown, but close to time @ 0x0000002a*
-0x0000027a | 2      | Firmware revision
-0x0000027c | 2      | Board revision
-0x00000400 | 4      | `0xa3 0xa3 0xa3 0xa3` *(header / seperator?)*
-0x00000600 | 4      | `0xa2 0xa2 0xa2 0xa2` Log entries header
-0x00000604 | 4      | Log entries end address
-0x00000608 | 4      | Log entries start address
-0x0000060c | 2      | Log entries count
+0x0000027b | 1      | Firmware revision
+0x0000027d | 1      | Board revision
+0x0000027f | 2      | Bike model (`SS` | `SR` | `DS` | *FX?*)
 
 
+## Log sections (located by header sequence)
+
+### Unknown *build date?*
+
+Offset     | Length | Contents                                      
+---------- | :----: | --------
+0x00000000 | 4      | `0xa0 0xa0 0xa0 0xa0` section header
+0x00000004 | 20     | Date and time (ascii)
+
+### Unknown *first run date?*
+
+Offset     | Length | Contents                                      
+---------- | :----: | --------
+0x00000000 | 4      | `0xa1 0xa1 0xa1 0xa1` section header
+0x00000004 | 20     | Date and time (ascii)
+
+### Event Log
+
+Offset     | Length     | Contents                                      
+---------- | :--------: | --------
+0x00000000 | 4          | `0xa2 0xa2 0xa2 0xa2` section header
+0x00000004 | 4          | Log entries end address
+0x00000008 | 4          | Log entries start address
+0x0000000c | 4          | Log entries count
+0x00000010 | *variable* | Log data begins
+
+### Error Log
+
+Offset     | Length     | Contents                                      
+---------- | :--------: | --------
+0x00000000 | 4          | `0xa3 0xa3 0xa3 0xa3` section header
+0x00000004 | 4          | Log entries end address
+0x00000008 | 4          | Log entries start address
+0x0000000c | 4          | Log entries count
+0x00000010 | *variable* | Log data begins
 
 
-# BMS log file layout
+# BMS log file layout (*WIP*)
 
 Address    | Length | Contents                                      
 ---------- | :----: | --------
@@ -43,11 +70,11 @@ Address    | Length | Contents
 
 Offset | Length    | Contents                                      
 ------ | :-------: | --------
-0x00   | 1         | `0xb2` *header byte*
-0x01   | 1         | Entry length (includes header byte)
+0x00   | 1         | `0xb2` Entry header
+0x01   | 1         | Entry length (including header byte)
 0x02   | 1         | Entry type - see following section
 0x03   | 4         | Timestamp (epoch)
-0x07   | *variabe* | Log message
+0x07   | *variabe* | Entry data
 
 ## Log file entry types
 
