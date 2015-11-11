@@ -205,6 +205,7 @@ def parse_log(bin_file, output):
     sys_info['VIN'] = log.unpack('char', 0x240, count=17)
     sys_info['Firmware rev.'] = log.unpack('uint16', 0x27b)
     sys_info['Board rev.'] = log.unpack('uint16', 0x27d)
+    sys_info['Model'] = log.unpack('char', 0x27f, count=2)
 
     entries_header_idx = log.index(b'\xa2\xa2\xa2\xa2')
     entries_end = log.unpack('uint32', 0x4, offset=entries_header_idx)
