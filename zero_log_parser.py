@@ -196,7 +196,7 @@ def parse_log(bin_file, output):
     '''
     Parse a Zero binary log file into a human readable text file
     '''
-    print 'Parsing {}...'.format(bin_file)
+    print('Parsing {}...'.format(bin_file))
 
     log = LogFile(bin_file)
 
@@ -212,7 +212,7 @@ def parse_log(bin_file, output):
     entries_start = log.unpack('uint32', 0x8, offset=entries_header_idx)
     entries_count = log.unpack('uint32', 0xc, offset=entries_header_idx)
 
-    print '{} entries found'.format(entries_count)
+    print('{} entries found'.format(entries_count))
 
     with open(output, 'w') as f:
         f.write('Zero MBB log\n')
@@ -239,7 +239,7 @@ def parse_log(bin_file, output):
 
         f.write('\n')
 
-    print 'Saved to {}'.format(output_file)
+    print('Saved to {}'.format(output_file))
 
 
 if __name__ == '__main__':
