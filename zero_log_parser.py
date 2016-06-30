@@ -121,15 +121,15 @@ def parse_entry(log, address, entry_num):
         return BinaryTools.unpack('char', x, 0x0, count=len(x) - 1)
 
     def board_status(x):
-        fields = {
-            'state': BinaryTools.unpack('uint8', x, 0x00)
+        condition_name = {
+            0x04: 'Software',
         }
 
-        condition = 'Unknown'
-        if fields['state'] == 0x04:
-            condition = 'Software'
+        fields = {
+            'condition': condition_name.get(BinaryTools.unpack('uint8', x, 0x00), 'Unknown')
+        }
 
-        return 'Board Reset                {0}'.format(condition)
+        return 'Board Reset                {condition}'.format(**fields)
 
     def key_state(x):
         fields = {
@@ -172,40 +172,14 @@ def parse_entry(log, address, entry_num):
             'controller_temp': BinaryTools.unpack('int16', x, 0xa),
             'rpm': BinaryTools.unpack('uint16', x, 0xc),
             'battery_current': BinaryTools.unpack('int16', x, 0x10),
-            'mods': mod_translate.get(BinaryTools.unpack('uint8', x, 0x12), "Unknown"),
+            'mods': mod_translate.get(BinaryTools.unpack('uint8', x, 0x12), 'Unknown'),
             'motor_current': BinaryTools.unpack('int16', x, 0x13),
             'ambient_temp': BinaryTools.unpack('int16', x, 0x15),
             'odometer': BinaryTools.unpack('uint32', x, 0x17),
         }
         return FORMAT['riding_format'].format(**fields)
 
-    def calex_status(x):
-        states = {
-            0x00: 'Disconnected',
-            0x01: 'Connected',
-        }
-
-        size = {
-            0x00: "720W",
-            0x01: "1200W",
-        }
-        module_name = {
-            0x00: 'Calex 720W',
-            0x01: 'Calex 1200W',
-            0x02: 'External Chg 0',
-            0x03: 'External Chg 1',
-        }
-
-        fields = {
-            'module': BinaryTools.unpack('uint8', x, 0x0),
-            'state': states.get(BinaryTools.unpack('uint8', x, 0x1)),
-            'module_name': module_name.get(BinaryTools.unpack('uint8', x, 0x0), "Unknown")
-        }
-
-        return '{module_name} Charger {module} {state:13s}'.format(**fields)
-
     def charging_status(x):
-#        s = "XXXXXXXXXXX %x" % (message_type) + " " + ' '.join(['0x{:02x}'.format(c) for c in x])
         fields = {
             'pack_temp_hi': BinaryTools.unpack('uint8', x, 0x00),
             'pack_temp_low': BinaryTools.unpack('uint8', x, 0x01),
@@ -220,9 +194,9 @@ def parse_entry(log, address, entry_num):
 
     def sevcon_status(x):
         cause = {
-            0x4681: "Preop",
-            0x4884: "Sequence Fault",
-            0x4981: "Throttle Fault",
+            0x4681: 'Preop',
+            0x4884: 'Sequence Fault',
+            0x4981: 'Throttle Fault',
         }
 
         fields = {
@@ -230,10 +204,31 @@ def parse_entry(log, address, entry_num):
             'reg': BinaryTools.unpack('uint8', x, 0x04),
             'sevcon_code': BinaryTools.unpack('uint16', x, 0x02),
             'data': ' '.join(['{:02X}'.format(c) for c in x[5:]]),
-            'cause': cause.get(BinaryTools.unpack('uint16', x, 0x02), "Unknown!"),
+            'cause': cause.get(BinaryTools.unpack('uint16', x, 0x02), 'Unknown!'),
         }
 
         return 'SEVCON CAN EMCY Frame      Error Code: 0x{code:04X}, Error Reg: 0x{reg:02X}, Sevcon Error Code: 0x{sevcon_code:04X}, Data: {data}, {cause}'.format(**fields)
+
+    def charger_status(x):
+        states = {
+            0x00: 'Disconnected',
+            0x01: 'Connected',
+        }
+
+        module_name = {
+            0x00: 'Calex 720W',
+            0x01: 'Calex 1200W',
+            0x02: 'External Chg 0',
+            0x03: 'External Chg 1',
+        }
+
+        fields = {
+            'module': BinaryTools.unpack('uint8', x, 0x0),
+            'state': states.get(BinaryTools.unpack('uint8', x, 0x1)),
+            'module_name': module_name.get(BinaryTools.unpack('uint8', x, 0x0), 'Unknown')
+        }
+
+        return '{module_name} Charger {module} {state:13s}'.format(**fields)
 
     def battery_status(x):
         states = {
@@ -243,7 +238,7 @@ def parse_entry(log, address, entry_num):
         }
 
         fields = {
-            'state': states.get(BinaryTools.unpack('uint8', x, 0x0), "Unknown!"),
+            'state': states.get(BinaryTools.unpack('uint8', x, 0x0), 'Unknown!'),
             'module': BinaryTools.unpack('uint8', x, 0x1),
             'modvolt': BinaryTools.unpack('uint32', x, 0x2) / 1000.0,
             'sysmax': BinaryTools.unpack('uint32', x, 0x6) / 1000.0,
@@ -287,7 +282,6 @@ def parse_entry(log, address, entry_num):
         return 'BT RX buffer reset'
 
     def battery_discharge_current_limited(x):
-#        return "XXXXXXXXXXX %x" % (message_type) + " " + ' '.join(['0x{:02x}'.format(c) for c in x])
         fields = {
             'limit': BinaryTools.unpack('uint16', x, 0x00),
             'min_cell': BinaryTools.unpack('uint16', x, 0x02),
@@ -331,7 +325,7 @@ def parse_entry(log, address, entry_num):
         return 'Battery module {:02} contactor closed'.format(module)
 
     def unhandled_entry_format(x):
-        return "(%x) " % (message_type) + ' '.join(['0x{:02x}'.format(c) for c in x])
+        return '(%x) ' % (message_type) + ' '.join(['0x{:02x}'.format(c) for c in x])
 
     parsers = {
         0x01: board_status,
@@ -343,7 +337,7 @@ def parse_entry(log, address, entry_num):
         0x2c: run_status,
         0x2d: charging_status,
         0x2f: sevcon_status,
-        0x30: calex_status,
+        0x30: charger_status,
         0x33: battery_status,
         0x34: power_state,
         0x36: sevcon_power_state,
@@ -363,7 +357,7 @@ def parse_entry(log, address, entry_num):
         }
     except:
         entry = {
-            'message': "Exception caught: " + unhandled_entry_format(message)
+            'message': 'Exception caught: ' + unhandled_entry_format(message)
         }
 
     if timestamp > 0xfff:
