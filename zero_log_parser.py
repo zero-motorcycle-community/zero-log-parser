@@ -20,24 +20,10 @@ import string
 from time import localtime, strftime, gmtime
 from collections import OrderedDict
 
-TRADITIONAL_FORMAT = {
-        'logline': '{entry:05d}  {time:19s}  {message}\n',
-        'time_format': '%Y-%m-%d %H:%M:%S',
-        'disarmed_format': 'Disarmed - pack: h {pack_temp_hi}C, l {pack_temp_low}C, {pack_voltage:03.3f}V, {soc}% SOC | motor: {motor_temp}C, {rpm}rpm | controller: {controller_temp}C, | power delivery: battery {battery_current}A, motor {motor_current}A',
-        'riding_format': 'Riding - pack: h {pack_temp_hi}C, l {pack_temp_low}C, {pack_voltage:03.3f}V, {soc}% SOC | motor: {motor_temp}C, {rpm}rpm | controller: {controller_temp}C, | power delivery: battery {battery_current}A, motor {motor_current}A',
-        'power_format': 'Power {state} ({source})',
-    }
 
-OFFICIAL_FORMAT = {
-        'logline': ' {entry:05d}     {time:>19s}   {message}\n',
-        'time_format': '%m/%d/%Y %H:%M:%S',
-        'disarmed_format': 'Disarmed                   PackTemp: h {pack_temp_hi}C, l {pack_temp_low}C, PackSOC:{soc:3d}%, Vpack:{pack_voltage:03.3f}V, MotAmps:{motor_current:4d}, BattAmps:{battery_current:4d}, Mods: {mods:02b}, MotTemp:{motor_temp:4d}C, CtrlTemp:{controller_temp:4d}C, AmbTemp:{ambient_temp:4d}C, MotRPM:{rpm:4d}, Odo:{odometer:5d}km',
-        'riding_format': 'Riding                     PackTemp: h {pack_temp_hi}C, l {pack_temp_low}C, PackSOC:{soc:3d}%, Vpack:{pack_voltage:7.3f}V, MotAmps:{motor_current:4d}, BattAmps:{battery_current:4d}, Mods: {mods}, MotTemp:{motor_temp:4d}C, CtrlTemp:{controller_temp:4d}C, AmbTemp:{ambient_temp:4d}C, MotRPM:{rpm:4d}, Odo:{odometer:5d}km',
-        'power_format': 'Power {state:3s}                  {source}',
-    }
-
-FORMAT = OFFICIAL_FORMAT
+TIME_FORMAT = '%m/%d/%Y %H:%M:%S'
 USE_MBB_TIME = True
+
 
 class BinaryTools:
     '''
@@ -176,7 +162,7 @@ def parse_entry(log, address, entry_num):
             'ambient_temp': BinaryTools.unpack('int16', x, 0x15),
             'odometer': BinaryTools.unpack('uint32', x, 0x17),
         }
-        return FORMAT['riding_format'].format(**fields)
+        return 'Riding                     PackTemp: h {pack_temp_hi}C, l {pack_temp_low}C, PackSOC:{soc:3d}%, Vpack:{pack_voltage:7.3f}V, MotAmps:{motor_current:4d}, BattAmps:{battery_current:4d}, Mods: {mods}, MotTemp:{motor_temp:4d}C, CtrlTemp:{controller_temp:4d}C, AmbTemp:{ambient_temp:4d}C, MotRPM:{rpm:4d}, Odo:{odometer:5d}km'.format(**fields)
 
     def charging_status(x):
         fields = {
@@ -271,7 +257,7 @@ def parse_entry(log, address, entry_num):
             'source': sources.get(BinaryTools.unpack('uint8', x, 0x1), 'Unknown')
         }
 
-        return FORMAT['power_format'].format(**fields)
+        return 'Power {state:3s}                  {source}'.format(**fields)
 
     def sevcon_power_state(x):
         is_on = BinaryTools.unpack('bool', x, 0x0)
@@ -317,7 +303,7 @@ def parse_entry(log, address, entry_num):
             'ambient_temp': BinaryTools.unpack('int16', x, 0x15),
             'odometer': BinaryTools.unpack('uint32', x, 0x17),
         }
-        return FORMAT['disarmed_format'].format(**fields)
+        return 'Disarmed                   PackTemp: h {pack_temp_hi}C, l {pack_temp_low}C, PackSOC:{soc:3d}%, Vpack:{pack_voltage:03.3f}V, MotAmps:{motor_current:4d}, BattAmps:{battery_current:4d}, Mods: {mods:02b}, MotTemp:{motor_temp:4d}C, CtrlTemp:{controller_temp:4d}C, AmbTemp:{ambient_temp:4d}C, MotRPM:{rpm:4d}, Odo:{odometer:5d}km'.format(**fields)
 
     def battery_contactor_closed(x):
         module = BinaryTools.unpack('uint8', x, 0x0)
@@ -362,9 +348,9 @@ def parse_entry(log, address, entry_num):
     if timestamp > 0xfff:
         if USE_MBB_TIME:
             # The output from the MBB (via serial port) lists time as GMT-7, so we should adjust
-            entry['time'] = strftime(FORMAT['time_format'], gmtime(timestamp - 7*60*60))
+            entry['time'] = strftime(TIME_FORMAT, gmtime(timestamp - 7*60*60))
         else:
-            entry['time'] = strftime(FORMAT['time_format'], localtime(timestamp))
+            entry['time'] = strftime(TIME_FORMAT, localtime(timestamp))
     else:
         entry['time'] = str(timestamp)
 
@@ -416,7 +402,7 @@ def parse_log(bin_file, output):
                 'time': entry['time'],
                 'message': entry['message']
             }
-            f.write(FORMAT['logline'].format(**fields))
+            f.write(' {entry:05d}     {time:>19s}   {message}\n'.format(**fields))
 
             read_pos += length
 
