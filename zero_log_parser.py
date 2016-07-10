@@ -17,6 +17,7 @@ import argparse
 import os
 import struct
 import string
+import codecs
 from time import localtime, strftime, gmtime
 from collections import OrderedDict
 
@@ -379,7 +380,7 @@ def parse_log(bin_file, output):
 
     print('{} entries found'.format(entries_count))
 
-    with open(output, 'w') as f:
+    with codecs.open(output, 'w', 'utf-8-sig') as f:
         f.write('Zero MBB log\n')
         f.write('\n')
 
