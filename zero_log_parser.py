@@ -69,8 +69,8 @@ class LogFile:
 
         while escape_offset != -1:
             escape_offset += start_offset
-            data[escape_offset] = data[escape_offset] ^ data[escape_offset+1] - 1
-            data = data[0:escape_offset+1] + data[escape_offset + 2:]
+            data[escape_offset] = data[escape_offset] ^ data[escape_offset + 1] - 1
+            data = data[0:escape_offset + 1] + data[escape_offset + 2:]
             start_offset = escape_offset + 1
             escape_offset = data[start_offset:].find('\xfe')
 
@@ -84,7 +84,8 @@ class LogFile:
                                   count=count)
 
     def extract(self, start_address, length, offset=0):
-        return self._data[start_address+offset:start_address+length+offset]
+        return self._data[start_address + offset:
+                          start_address + length + offset]
 
 
 def parse_entry(log, address, entry_num):
@@ -97,7 +98,8 @@ def parse_entry(log, address, entry_num):
 
     length = log.unpack('uint8', 0x1, offset=address)
 
-    unescaped_block = log.unescape_block(log.extract(0x02, length-2, offset=address))
+    unescaped_block = log.unescape_block(log.extract(0x02, length - 2,
+                                                     offset=address))
 
     message_type = BinaryTools.unpack('uint8', unescaped_block, 0x00)
     timestamp = BinaryTools.unpack('uint32', unescaped_block, 0x01)
@@ -191,7 +193,18 @@ def parse_entry(log, address, entry_num):
         }
         return {
             'event': 'Riding',
-            'conditions': 'PackTemp: h {pack_temp_hi}C, l {pack_temp_low}C, PackSOC:{soc:3d}%, Vpack:{pack_voltage:7.3f}V, MotAmps:{motor_current:4d}, BattAmps:{battery_current:4d}, Mods: {mods}, MotTemp:{motor_temp:4d}C, CtrlTemp:{controller_temp:4d}C, AmbTemp:{ambient_temp:4d}C, MotRPM:{rpm:4d}, Odo:{odometer:5d}km'.format(**fields)
+            'conditions': ('PackTemp: h {pack_temp_hi}C, l {pack_temp_low}C, '
+                           'PackSOC:{soc:3d}%, '
+                           'Vpack:{pack_voltage:7.3f}V, '
+                           'MotAmps:{motor_current:4d}, '
+                           'BattAmps:{battery_current:4d}, '
+                           'Mods: {mods}, '
+                           'MotTemp:{motor_temp:4d}C, '
+                           'CtrlTemp:{controller_temp:4d}C, '
+                           'AmbTemp:{ambient_temp:4d}C, '
+                           'MotRPM:{rpm:4d}, '
+                           'Odo:{odometer:5d}km'
+                           ).format(**fields)
         }
 
     def charging_status(x):
@@ -207,7 +220,15 @@ def parse_entry(log, address, entry_num):
 
         return {
             'event': 'Charging',
-            'conditions': 'PackTemp: h {pack_temp_hi}C, l {pack_temp_low}C, AmbTemp: {ambient_temp}C, PackSOC:{soc:3d}%, Vpack:{pack_voltage:7.3f}V, BattAmps: {battery_current:3d}, Mods: {mods:02b}, MbbChgEn: Yes, BmsChgEn: No'.format(**fields)
+            'conditions': ('PackTemp: h {pack_temp_hi}C, l {pack_temp_low}C, '
+                           'AmbTemp: {ambient_temp}C, '
+                           'PackSOC:{soc:3d}%, '
+                           'Vpack:{pack_voltage:7.3f}V, '
+                           'BattAmps: {battery_current:3d}, '
+                           'Mods: {mods:02b}, '
+                           'MbbChgEn: Yes, '
+                           'BmsChgEn: No'
+                           ).format(**fields)
         }
 
     def sevcon_status(x):
@@ -228,7 +249,12 @@ def parse_entry(log, address, entry_num):
 
         return {
             'event': 'SEVCON CAN EMCY Frame',
-            'conditions': 'Error Code: 0x{code:04X}, Error Reg: 0x{reg:02X}, Sevcon Error Code: 0x{sevcon_code:04X}, Data: {data}, {cause}'.format(**fields)
+            'conditions': ('Error Code: 0x{code:04X}, '
+                           'Error Reg: 0x{reg:02X}, '
+                           'Sevcon Error Code: 0x{sevcon_code:04X}, '
+                           'Data: {data}, '
+                           '{cause}'
+                           ).format(**fields)
         }
 
     def charger_status(x):
@@ -289,7 +315,13 @@ def parse_entry(log, address, entry_num):
             'event': 'Module {module:02} {event}'.format(**fields),
             'conditions': {
                 0x00: 'vmod: {modvolt:7.3f}V, batt curr: {batcurr:3.0f}A',
-                0x01: 'vmod: {modvolt:7.3f}V, maxsys: {sysmax:7.3f}V, minsys: {sysmin:7.3f}V, diff: {diff:0.03f}V, vcap: {vcap:6.3f}V, prechg: {prechg}%',
+                0x01: ('vmod: {modvolt:7.3f}V, '
+                       'maxsys: {sysmax:7.3f}V, '
+                       'minsys: {sysmin:7.3f}V, '
+                       'diff: {diff:0.03f}V, '
+                       'vcap: {vcap:6.3f}V, '
+                       'prechg: {prechg}%'
+                       ),
                 0x02: 'serial: {serial},  vmod: {modvolt:3.3f}V'
             }.get(event, '').format(**fields)
         }
@@ -339,7 +371,10 @@ def parse_entry(log, address, entry_num):
 
         return {
             'event': 'Batt Dischg Cur Limited',
-            'conditions': '{limit} A ({percent}%), MinCell: {min_cell}mV, MaxPackTemp: {temp}C'.format(**fields)
+            'conditions': ('{limit} A ({percent}%), '
+                           'MinCell: {min_cell}mV, '
+                           'MaxPackTemp: {temp}C'
+                           ).format(**fields)
         }
 
     def low_chassis_isolation(x):
@@ -377,7 +412,18 @@ def parse_entry(log, address, entry_num):
 
         return {
             'event': 'Disarmed',
-            'conditions': 'PackTemp: h {pack_temp_hi}C, l {pack_temp_low}C, PackSOC:{soc:3d}%, Vpack:{pack_voltage:03.3f}V, MotAmps:{motor_current:4d}, BattAmps:{battery_current:4d}, Mods: {mods:02b}, MotTemp:{motor_temp:4d}C, CtrlTemp:{controller_temp:4d}C, AmbTemp:{ambient_temp:4d}C, MotRPM:{rpm:4d}, Odo:{odometer:5d}km'.format(**fields)
+            'conditions': ('PackTemp: h {pack_temp_hi}C, l {pack_temp_low}C, '
+                           'PackSOC:{soc:3d}%, '
+                           'Vpack:{pack_voltage:03.3f}V, '
+                           'MotAmps:{motor_current:4d}, '
+                           'BattAmps:{battery_current:4d}, '
+                           'Mods: {mods:02b}, '
+                           'MotTemp:{motor_temp:4d}C, '
+                           'CtrlTemp:{controller_temp:4d}C, '
+                           'AmbTemp:{ambient_temp:4d}C, '
+                           'MotRPM:{rpm:4d}, '
+                           'Odo:{odometer:5d}km'
+                           ).format(**fields)
         }
 
     def battery_contactor_closed(x):
@@ -433,8 +479,9 @@ def parse_entry(log, address, entry_num):
 
     if timestamp > 0xfff:
         if USE_MBB_TIME:
-            # The output from the MBB (via serial port) lists time as GMT-7, so we should adjust
-            entry['time'] = strftime(TIME_FORMAT, gmtime(timestamp - 7*60*60))
+            # The output from the MBB (via serial port) lists time as GMT-7
+            entry['time'] = strftime(TIME_FORMAT,
+                                     gmtime(timestamp - 7 * 60 * 60))
         else:
             entry['time'] = strftime(TIME_FORMAT, localtime(timestamp))
     else:
@@ -481,7 +528,7 @@ def parse_log(bin_file, output):
 
         read_pos = entries_start
         for entry_num in range(entries_count):
-            (length, entry) = parse_entry(log, read_pos, entry_num+1)
+            (length, entry) = parse_entry(log, read_pos, entry_num + 1)
 
             entry['line'] = entry_num + 1
 
