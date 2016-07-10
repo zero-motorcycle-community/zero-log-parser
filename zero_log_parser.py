@@ -88,7 +88,7 @@ class LogFile:
                           start_address + length + offset]
 
 
-def parse_entry(log, address, entry_num):
+def parse_entry(log, address):
     '''
     Parse an individual entry from a LogFile into a human readable form
     '''
@@ -528,7 +528,7 @@ def parse_log(bin_file, output):
 
         read_pos = entries_start
         for entry_num in range(entries_count):
-            (length, entry) = parse_entry(log, read_pos, entry_num + 1)
+            (length, entry) = parse_entry(log, read_pos)
 
             entry['line'] = entry_num + 1
 
