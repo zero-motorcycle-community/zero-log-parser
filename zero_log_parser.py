@@ -104,42 +104,67 @@ def parse_entry(log, address, entry_num):
     message = unescaped_block[0x05:]
 
     def debug_message(x):
-        return BinaryTools.unpack('char', x, 0x0, count=len(x) - 1)
+        return {
+            'event': BinaryTools.unpack('char', x, 0x0, count=len(x) - 1),
+            'conditions': ''
+        }
 
     def board_status(x):
-        condition_name = {
+        causes = {
             0x04: 'Software',
         }
 
         fields = {
-            'condition': condition_name.get(BinaryTools.unpack('uint8', x, 0x00), 'Unknown')
+            'cause': causes.get(BinaryTools.unpack('uint8', x, 0x00),
+                                'Unknown')
         }
 
-        return 'Board Reset                {condition}'.format(**fields)
+        return {
+            'event': 'Board Reset',
+            'conditions': '{cause}'.format(**fields)
+        }
 
     def key_state(x):
         fields = {
             'state': 'On ' if BinaryTools.unpack('bool', x, 0x0) else 'Off'
         }
-        return 'Key {state}'.format(**fields)
+
+        return {
+            'event': 'Key {state}'.format(**fields),
+            'conditions': ''
+        }
 
     def battery_can_link_up(x):
         fields = {
             'module': BinaryTools.unpack('uint8', x, 0x0)
         }
-        return 'Module {module:02} CAN Link Up'.format(**fields)
+
+        return {
+            'event': 'Module {module:02} CAN Link Up'.format(**fields),
+            'conditions': ''
+        }
 
     def battery_can_link_down(x):
         fields = {
             'module': BinaryTools.unpack('uint8', x, 0x0)
         }
-        return 'Module {module:02} CAN Link Down'.format(**fields)
+
+        return {
+            'event': 'Module {module:02} CAN Link Down'.format(**fields),
+            'conditions': ''
+        }
 
     def sevcon_can_link_up(x):
-        return 'Sevcon CAN Link Up'
+        return {
+            'event': 'Sevcon CAN Link Up',
+            'conditions': ''
+        }
 
     def sevcon_can_link_down(x):
-        return 'Sevcon CAN Link Down'
+        return {
+            'event': 'Sevcon CAN Link Down',
+            'conditions': ''
+        }
 
     def run_status(x):
         mod_translate = {
@@ -158,12 +183,16 @@ def parse_entry(log, address, entry_num):
             'controller_temp': BinaryTools.unpack('int16', x, 0xa),
             'rpm': BinaryTools.unpack('uint16', x, 0xc),
             'battery_current': BinaryTools.unpack('int16', x, 0x10),
-            'mods': mod_translate.get(BinaryTools.unpack('uint8', x, 0x12), 'Unknown'),
+            'mods': mod_translate.get(BinaryTools.unpack('uint8', x, 0x12),
+                                      'Unknown'),
             'motor_current': BinaryTools.unpack('int16', x, 0x13),
             'ambient_temp': BinaryTools.unpack('int16', x, 0x15),
             'odometer': BinaryTools.unpack('uint32', x, 0x17),
         }
-        return 'Riding                     PackTemp: h {pack_temp_hi}C, l {pack_temp_low}C, PackSOC:{soc:3d}%, Vpack:{pack_voltage:7.3f}V, MotAmps:{motor_current:4d}, BattAmps:{battery_current:4d}, Mods: {mods}, MotTemp:{motor_temp:4d}C, CtrlTemp:{controller_temp:4d}C, AmbTemp:{ambient_temp:4d}C, MotRPM:{rpm:4d}, Odo:{odometer:5d}km'.format(**fields)
+        return {
+            'event': 'Riding',
+            'conditions': 'PackTemp: h {pack_temp_hi}C, l {pack_temp_low}C, PackSOC:{soc:3d}%, Vpack:{pack_voltage:7.3f}V, MotAmps:{motor_current:4d}, BattAmps:{battery_current:4d}, Mods: {mods}, MotTemp:{motor_temp:4d}C, CtrlTemp:{controller_temp:4d}C, AmbTemp:{ambient_temp:4d}C, MotRPM:{rpm:4d}, Odo:{odometer:5d}km'.format(**fields)
+        }
 
     def charging_status(x):
         fields = {
@@ -176,7 +205,10 @@ def parse_entry(log, address, entry_num):
             'ambient_temp': BinaryTools.unpack('int8', x, 0x0d),
         }
 
-        return 'Charging                   PackTemp: h {pack_temp_hi}C, l {pack_temp_low}C, AmbTemp: {ambient_temp}C, PackSOC:{soc:3d}%, Vpack:{pack_voltage:7.3f}V, BattAmps: {battery_current:3d}, Mods: {mods:02b}, MbbChgEn: Yes, BmsChgEn: No'.format(**fields)
+        return {
+            'event': 'Charging',
+            'conditions': 'PackTemp: h {pack_temp_hi}C, l {pack_temp_low}C, AmbTemp: {ambient_temp}C, PackSOC:{soc:3d}%, Vpack:{pack_voltage:7.3f}V, BattAmps: {battery_current:3d}, Mods: {mods:02b}, MbbChgEn: Yes, BmsChgEn: No'.format(**fields)
+        }
 
     def sevcon_status(x):
         cause = {
@@ -190,10 +222,14 @@ def parse_entry(log, address, entry_num):
             'reg': BinaryTools.unpack('uint8', x, 0x04),
             'sevcon_code': BinaryTools.unpack('uint16', x, 0x02),
             'data': ' '.join(['{:02X}'.format(c) for c in x[5:]]),
-            'cause': cause.get(BinaryTools.unpack('uint16', x, 0x02), 'Unknown!'),
+            'cause': cause.get(BinaryTools.unpack('uint16', x, 0x02),
+                               'Unknown')
         }
 
-        return 'SEVCON CAN EMCY Frame      Error Code: 0x{code:04X}, Error Reg: 0x{reg:02X}, Sevcon Error Code: 0x{sevcon_code:04X}, Data: {data}, {cause}'.format(**fields)
+        return {
+            'event': 'SEVCON CAN EMCY Frame',
+            'conditions': 'Error Code: 0x{code:04X}, Error Reg: 0x{reg:02X}, Sevcon Error Code: 0x{sevcon_code:04X}, Data: {data}, {cause}'.format(**fields)
+        }
 
     def charger_status(x):
         states = {
@@ -201,7 +237,7 @@ def parse_entry(log, address, entry_num):
             0x01: 'Connected',
         }
 
-        module_name = {
+        name = {
             0x00: 'Calex 720W',
             0x01: 'Calex 1200W',
             0x02: 'External Chg 0',
@@ -211,20 +247,26 @@ def parse_entry(log, address, entry_num):
         fields = {
             'module': BinaryTools.unpack('uint8', x, 0x0),
             'state': states.get(BinaryTools.unpack('uint8', x, 0x1)),
-            'module_name': module_name.get(BinaryTools.unpack('uint8', x, 0x0), 'Unknown')
+            'name': name.get(BinaryTools.unpack('uint8', x, 0x0),
+                             'Unknown')
         }
 
-        return '{module_name} Charger {module} {state:13s}'.format(**fields)
+        return {
+            'event': '{name} Charger {module} {state:13s}'.format(**fields),
+            'conditions': ''
+        }
 
     def battery_status(x):
-        states = {
+        events = {
             0x00: 'Opening Contactor',
             0x01: 'Closing Contactor',
-            0x02: 'Registered'
+            0x02: 'Registered',
         }
 
+        event = BinaryTools.unpack('uint8', x, 0x0)
+
         fields = {
-            'state': states.get(BinaryTools.unpack('uint8', x, 0x0), 'Unknown!'),
+            'event': events.get(event, 'Unknown (0x{:02x})'.format(event)),
             'module': BinaryTools.unpack('uint8', x, 0x1),
             'modvolt': BinaryTools.unpack('uint32', x, 0x2) / 1000.0,
             'sysmax': BinaryTools.unpack('uint32', x, 0x6) / 1000.0,
@@ -233,18 +275,24 @@ def parse_entry(log, address, entry_num):
             'batcurr': BinaryTools.unpack('int16', x, 0x12),
             'serial': BinaryTools.unpack('char', x, 0x14, count=len(x[0x14:])),
         }
-
-        # Ensuring the serial is printable
-        fields['serial'] = filter(lambda x: x in string.printable, fields['serial'])
-
-        if BinaryTools.unpack('uint8', x, 0x0) == 0x00:
-            return 'Module {module:02} {state}  vmod: {modvolt:7.3f}V, batt curr: {batcurr:3.0f}A'.format(**fields)
-        elif BinaryTools.unpack('uint8', x, 0x00) == 0x01:
-            fields['diff'] = fields['sysmax'] - fields['sysmin']
+        fields['diff'] = fields['sysmax'] - fields['sysmin']
+        try:
             fields['prechg'] = int(fields['vcap'] * 100 / fields['modvolt'])
-            return 'Module {module:02} {state}  vmod: {modvolt:7.3f}V, maxsys: {sysmax:7.3f}V, minsys: {sysmin:7.3f}V, diff: {diff:0.03f}V, vcap: {vcap:6.3f}V, prechg: {prechg}%'.format(**fields)
-        else:
-            return 'Module {module:02} {state}     serial: {serial},  vmod: {modvolt:3.3f}V'.format(**fields)
+        except:
+            fields['prechg'] = 0
+
+        # Ensure the serial is printable
+        fields['serial'] = filter(lambda x: x in string.printable,
+                                  fields['serial'])
+
+        return {
+            'event': 'Module {module:02} {event}'.format(**fields),
+            'conditions': {
+                0x00: 'vmod: {modvolt:7.3f}V, batt curr: {batcurr:3.0f}A',
+                0x01: 'vmod: {modvolt:7.3f}V, maxsys: {sysmax:7.3f}V, minsys: {sysmin:7.3f}V, diff: {diff:0.03f}V, vcap: {vcap:6.3f}V, prechg: {prechg}%',
+                0x02: 'serial: {serial},  vmod: {modvolt:3.3f}V'
+            }.get(event, '').format(**fields)
+        }
 
     def power_state(x):
         sources = {
@@ -255,17 +303,30 @@ def parse_entry(log, address, entry_num):
 
         fields = {
             'state': 'On' if BinaryTools.unpack('bool', x, 0x0) else 'Off',
-            'source': sources.get(BinaryTools.unpack('uint8', x, 0x1), 'Unknown')
+            'source': sources.get(BinaryTools.unpack('uint8', x, 0x1),
+                                  'Unknown')
         }
 
-        return 'Power {state:3s}                  {source}'.format(**fields)
+        return {
+            'event': 'Power {state}'.format(**fields),
+            'conditions': '{source}'.format(**fields)
+        }
 
     def sevcon_power_state(x):
-        is_on = BinaryTools.unpack('bool', x, 0x0)
-        return 'Sevcon {}'.format('Turned On' if is_on else 'Turned Off')
+        fields = {
+            'state': 'On' if BinaryTools.unpack('bool', x, 0x0) else 'Off'
+        }
+
+        return {
+            'event': 'Sevcon Turned {state}'.format(**fields),
+            'conditions': ''
+        }
 
     def show_bluetooth_state(x):
-        return 'BT RX buffer reset'
+        return {
+            'event': 'BT RX buffer reset',
+            'conditions': ''
+        }
 
     def battery_discharge_current_limited(x):
         fields = {
@@ -274,20 +335,29 @@ def parse_entry(log, address, entry_num):
             'temp': BinaryTools.unpack('uint8', x, 0x04),
             'max_amp': BinaryTools.unpack('uint16', x, 0x05),
         }
-
         fields['percent'] = fields['limit'] * 100 / fields['max_amp']
 
-        return 'Batt Dischg Cur Limited    {limit} A ({percent}%), MinCell: {min_cell}mV, MaxPackTemp: {temp}C'.format(**fields)
+        return {
+            'event': 'Batt Dischg Cur Limited',
+            'conditions': '{limit} A ({percent}%), MinCell: {min_cell}mV, MaxPackTemp: {temp}C'.format(**fields)
+        }
 
     def low_chassis_isolation(x):
         fields = {
             'kohms': BinaryTools.unpack('uint32', x, 0x00),
             'cell': BinaryTools.unpack('uint8', x, 0x04),
         }
-        return 'Low Chassis Isolation      {kohms} KOhms to cell {cell}'.format(**fields)
+
+        return {
+            'event': 'Low Chassis Isolation',
+            'conditions': '{kohms} KOhms to cell {cell}'.format(**fields)
+        }
 
     def precharge_decay_too_steep(x):
-        return 'Precharge Decay Too Steep. Restarting Sevcon.'
+        return {
+            'event': 'Precharge Decay Too Steep. Restarting Sevcon.',
+            'conditions': ''
+        }
 
     def disarmed_status(x):
         fields = {
@@ -304,14 +374,32 @@ def parse_entry(log, address, entry_num):
             'ambient_temp': BinaryTools.unpack('int16', x, 0x15),
             'odometer': BinaryTools.unpack('uint32', x, 0x17),
         }
-        return 'Disarmed                   PackTemp: h {pack_temp_hi}C, l {pack_temp_low}C, PackSOC:{soc:3d}%, Vpack:{pack_voltage:03.3f}V, MotAmps:{motor_current:4d}, BattAmps:{battery_current:4d}, Mods: {mods:02b}, MotTemp:{motor_temp:4d}C, CtrlTemp:{controller_temp:4d}C, AmbTemp:{ambient_temp:4d}C, MotRPM:{rpm:4d}, Odo:{odometer:5d}km'.format(**fields)
+
+        return {
+            'event': 'Disarmed',
+            'conditions': 'PackTemp: h {pack_temp_hi}C, l {pack_temp_low}C, PackSOC:{soc:3d}%, Vpack:{pack_voltage:03.3f}V, MotAmps:{motor_current:4d}, BattAmps:{battery_current:4d}, Mods: {mods:02b}, MotTemp:{motor_temp:4d}C, CtrlTemp:{controller_temp:4d}C, AmbTemp:{ambient_temp:4d}C, MotRPM:{rpm:4d}, Odo:{odometer:5d}km'.format(**fields)
+        }
 
     def battery_contactor_closed(x):
-        module = BinaryTools.unpack('uint8', x, 0x0)
-        return 'Battery module {:02} contactor closed'.format(module)
+        fields = {
+            'module': BinaryTools.unpack('uint8', x, 0x0)
+        }
+
+        return {
+            'event': 'Battery module {module:02} contactor closed'.format(**fields),
+            'conditions': ''
+        }
 
     def unhandled_entry_format(x):
-        return '(%x) ' % (message_type) + ' '.join(['0x{:02x}'.format(c) for c in x])
+        fields = {
+            'message_type': '0x{:02x}'.format(message_type),
+            'message': ' '.join(['0x{:02x}'.format(c) for c in x])
+        }
+
+        return {
+            'event': '{message_type} {message}'.format(**fields),
+            'conditions': ''
+        }
 
     parsers = {
         0x01: board_status,
@@ -338,13 +426,10 @@ def parse_entry(log, address, entry_num):
     entry_parser = parsers.get(message_type, unhandled_entry_format)
 
     try:
-        entry = {
-            'message': entry_parser(message)
-        }
+        entry = entry_parser(message)
     except:
-        entry = {
-            'message': 'Exception caught: ' + unhandled_entry_format(message)
-        }
+        entry = unhandled_entry_format(message)
+        entry['event'] = 'Exception caught: ' + entry['event']
 
     if timestamp > 0xfff:
         if USE_MBB_TIME:
@@ -398,12 +483,12 @@ def parse_log(bin_file, output):
         for entry_num in range(entries_count):
             (length, entry) = parse_entry(log, read_pos, entry_num+1)
 
-            fields = {
-                'entry': entry_num + 1,
-                'time': entry['time'],
-                'message': entry['message']
-            }
-            f.write(' {entry:05d}     {time:>19s}   {message}\n'.format(**fields))
+            entry['line'] = entry_num + 1
+
+            if entry['conditions']:
+                f.write(' {line:05d}     {time:>19s}   {event:25}  {conditions}\n'.format(**entry))
+            else:
+                f.write(' {line:05d}     {time:>19s}   {event}\n'.format(**entry))
 
             read_pos += length
 
