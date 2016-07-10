@@ -15,7 +15,6 @@ Usage:
 
 import argparse
 import os
-import mmap
 import struct
 import string
 from time import localtime, strftime, gmtime
