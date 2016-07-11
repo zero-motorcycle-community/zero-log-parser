@@ -8,8 +8,8 @@ Address    | Length | Contents
 ---------- | :----: | --------
 0x00000200 | 21     | Serial number
 0x00000240 | 17     | VIN number
-0x0000027b | 1      | Firmware revision
-0x0000027d | 1      | Board revision
+0x0000027b | 2      | Firmware revision
+0x0000027d | 2      | Board revision
 0x0000027f | 3      | Bike model (`SS`, `SR`, `DS`, *FX?*)
 
 
