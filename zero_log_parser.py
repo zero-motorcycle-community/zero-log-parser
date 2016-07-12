@@ -47,22 +47,13 @@ class BinaryTools:
     }
 
     @staticmethod
-    def unpack(type_name, buff, address, count=1):
+    def unpack(type_name, buff, address, count=1, offset=0):
         type_char = BinaryTools.TYPES[type_name.lower()]
         type_format = '<{}{}'.format(count, type_char)
-        return struct.unpack_from(type_format, buff, address)[0]
+        return struct.unpack_from(type_format, buff, address + offset)[0]
 
-
-class LogFile:
-    '''
-    Wrapper for our raw log file
-    '''
-
-    def __init__(self, file_path):
-        with open(file_path, 'rb') as f:
-            self._data = bytearray(f.read())
-
-    def unescape_block(self, data):
+    @staticmethod
+    def unescape_block(data):
         start_offset = 0
 
         escape_offset = data.find('\xfe')
@@ -76,6 +67,16 @@ class LogFile:
 
         return data
 
+
+class LogFile:
+    '''
+    Wrapper for our raw log file
+    '''
+
+    def __init__(self, file_path):
+        with open(file_path, 'rb') as f:
+            self._data = bytearray(f.read())
+
     def index(self, sequence):
         return self._data.index(sequence)
 
@@ -87,19 +88,21 @@ class LogFile:
         return self._data[start_address + offset:
                           start_address + length + offset]
 
+    def raw(self):
+        return bytearray(self._data)
 
-def parse_entry(log, address):
+
+def parse_entry(log_data, address):
     '''
     Parse an individual entry from a LogFile into a human readable form
     '''
-    header = log.unpack('char', 0x0, offset=address)
+    header = BinaryTools.unpack('char', log_data, 0x0, offset=address)
     if header != b'\xb2':
         raise ValueError('Invalid entry header byte')
 
-    length = log.unpack('uint8', 0x1, offset=address)
+    length = BinaryTools.unpack('uint8', log_data, 0x1, offset=address)
 
-    unescaped_block = log.unescape_block(log.extract(0x02, length - 2,
-                                                     offset=address))
+    unescaped_block = BinaryTools.unescape_block(log_data[address + 0x2:address + length])
 
     message_type = BinaryTools.unpack('uint8', unescaped_block, 0x00)
     timestamp = BinaryTools.unpack('uint32', unescaped_block, 0x01)
@@ -509,6 +512,14 @@ def parse_log(bin_file, output):
     entries_end = log.unpack('uint32', 0x4, offset=entries_header_idx)
     entries_start = log.unpack('uint32', 0x8, offset=entries_header_idx)
     entries_count = log.unpack('uint32', 0xc, offset=entries_header_idx)
+    entries_data_begin = entries_header_idx + 0x10
+
+    # Handle data wrapping across the upper bound of the ring buffer
+    if entries_start > entries_end:
+        event_log = log.raw()[entries_start:] + \
+            log.raw()[entries_data_begin:entries_end]
+    else:
+        event_log = log.raw()[entries_start:entries_end]
 
     print('{} entries found'.format(entries_count))
 
@@ -520,15 +531,14 @@ def parse_log(bin_file, output):
             f.write('{0:18} {1}\n'.format(k, v))
         f.write('\n')
 
-        # This conforms to the output of the MBB log
         f.write('Printing {0} of {0} log entries..\n'.format(entries_count))
         f.write('\n')
         f.write(' Entry    Time of Log            Event                      Conditions\n')
         f.write('+--------+----------------------+--------------------------+----------------------------------\n')
 
-        read_pos = entries_start
+        read_pos = 0
         for entry_num in range(entries_count):
-            (length, entry) = parse_entry(log, read_pos)
+            (length, entry) = parse_entry(event_log, read_pos)
 
             entry['line'] = entry_num + 1
 

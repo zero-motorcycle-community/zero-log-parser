@@ -49,6 +49,7 @@ Offset     | Length     | Contents
 0x0000000c | 4          | Log entries count
 0x00000010 | *variable* | Log data begins
 
+The event log file appears to be a direct memory dump from a ring buffer. All logs export as 0x3ffff bytes in length. Bikes logs which exceed this offset begin overwriting themself from the top of the log data section.
 
 # BMS log file layout (*WIP*)
 
