@@ -56,14 +56,14 @@ class BinaryTools:
     def unescape_block(data):
         start_offset = 0
 
-        escape_offset = data.find('\xfe')
+        escape_offset = data.find(b'\xfe')
 
         while escape_offset != -1:
             escape_offset += start_offset
             data[escape_offset] = data[escape_offset] ^ data[escape_offset + 1] - 1
             data = data[0:escape_offset + 1] + data[escape_offset + 2:]
             start_offset = escape_offset + 1
-            escape_offset = data[start_offset:].find('\xfe')
+            escape_offset = data[start_offset:].find(b'\xfe')
 
         return data
 
