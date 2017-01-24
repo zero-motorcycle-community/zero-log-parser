@@ -2,7 +2,7 @@
 
 This is a little decoder utility to parse Zero Motorcycle main bike board (MBB) logs.
 
-Basic log documentation is at <log_structure.md>.
+Basic log documentation is at [log_structure.md](log_structure.md).
 
 Originally developed at https://github.com/KimBurgess/zero-log-parser
 
