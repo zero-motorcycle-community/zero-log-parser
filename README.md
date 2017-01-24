@@ -29,6 +29,6 @@ These currently look at a suite of log files and just run the parser to look for
   `$ python test.py <directory of log files>`
 
 ## Authors
-* **Kim Burgess** - *Initial Work* - [@KimBurgess](https://github.com/KimBurgess/)
+* **Kim Burgess** - *Initial Work, Inactive* - [@KimBurgess](https://github.com/KimBurgess/)
 * **Brian Rice** - *Maintainer* - [@BrianTRice](https://github.com/BrianTRice/)
 * **Keith Thomas** - *Contributor* - [@keithxemi](https://github.com/keithxemi)
