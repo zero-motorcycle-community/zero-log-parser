@@ -493,7 +493,7 @@ def parse_entry(log_data, address):
     return (length, entry)
 
 
-def parse_log(bin_file, output):
+def parse_log(bin_file, output_file):
     '''
     Parse a Zero binary log file into a human readable text file
     '''
@@ -523,7 +523,7 @@ def parse_log(bin_file, output):
 
     print('{} entries found'.format(entries_count))
 
-    with codecs.open(output, 'w', 'utf-8-sig') as f:
+    with codecs.open(output_file, 'w', 'utf-8-sig') as f:
         f.write('Zero MBB log\n')
         f.write('\n')
 
