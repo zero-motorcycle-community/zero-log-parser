@@ -9,5 +9,5 @@ setup(name='Zero log parser',
       license='MIT',
       packages=[],
       test_suite='nose.collector',
-      tests_require=['nose', 'ddt'],
+      tests_require=['nose'],
       zip_safe=False)
