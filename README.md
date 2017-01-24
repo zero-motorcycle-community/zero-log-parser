@@ -7,3 +7,6 @@ zero support.
 Usage:
 
   `$ python zero_log_parser.py <*.bin file> [-o output_file]`
+
+Testing:
+  `$ python test.py <directory of log files>`
