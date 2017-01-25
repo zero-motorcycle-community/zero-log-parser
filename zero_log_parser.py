@@ -90,6 +90,18 @@ class LogFile:
 
     def raw(self):
         return bytearray(self._data)
+		
+def align_entry(log_data, address):
+     match = False
+     while not match:
+         header = BinaryTools.unpack('char', log_data, 0x0, offset=address)
+         if header != b'\xb2':
+             address += 1
+         else:
+             match=True
+     if address > 0:
+	     print('Skipped {} bytes for alignment'.format(address))
+     return address
 
 
 def parse_entry(log_data, address):
@@ -540,7 +552,7 @@ def parse_log(bin_file, output_file):
         f.write(' Entry    Time of Log            Event                      Conditions\n')
         f.write('+--------+----------------------+--------------------------+----------------------------------\n')
 
-        read_pos = 0
+        read_pos = align_entry(event_log,0)
         for entry_num in range(entries_count):
             (length, entry) = parse_entry(event_log, read_pos)
 
