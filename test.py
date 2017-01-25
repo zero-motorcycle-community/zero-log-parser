@@ -11,7 +11,7 @@ logfiles_to_test = None
 
 def logfile_test_generator(logfile):
     def test(self):
-        self.test_can_process_logfile(logfile)
+        self._test_can_process_logfile(logfile)
     return test
 
 class TestLogParser(unittest.TestCase):
@@ -23,7 +23,7 @@ class TestLogParser(unittest.TestCase):
         # Remove the directory after the test
         shutil.rmtree(self.test_dir)
 
-    def test_can_process_logfile(self, logfile):
+    def _test_can_process_logfile(self, logfile):
         output_file = os.path.join(self.test_dir, 'log_output.txt')
         zero_log_parser.parse_log(logfile, output_file)
 
