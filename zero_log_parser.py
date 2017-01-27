@@ -90,29 +90,20 @@ class LogFile:
 
     def raw(self):
         return bytearray(self._data)
-		
-def align_entry(log_data, address):
-     match = False
-     while not match:
-         header = BinaryTools.unpack('char', log_data, 0x0, offset=address)
-         if header != b'\xb2':
-             address += 1
-         else:
-             match=True
-     if address > 0:
-	     print('Skipped {} bytes for alignment'.format(address))
-     return address
 
 
 def parse_entry(log_data, address):
     '''
     Parse an individual entry from a LogFile into a human readable form
     '''
-    header = BinaryTools.unpack('char', log_data, 0x0, offset=address)
-    if header != b'\xb2':
-        raise ValueError('Invalid entry header byte')
-
-    length = BinaryTools.unpack('uint8', log_data, 0x1, offset=address)
+    header = log_data[address]
+    # correct header offset as needed to prevent errors
+    header_bad = header != 0xb2
+    while header_bad:
+        address += 1
+        header = log_data[address]
+        header_bad = header != 0xb2
+    length = log_data[address + 1]
 
     unescaped_block = BinaryTools.unescape_block(log_data[address + 0x2:address + length])
 
@@ -528,7 +519,7 @@ def parse_log(bin_file, output_file):
     entries_data_begin = entries_header_idx + 0x10
 
     # Handle data wrapping across the upper bound of the ring buffer
-    if entries_start > entries_end:
+    if entries_start >= entries_end:
         event_log = log.raw()[entries_start:] + \
             log.raw()[entries_data_begin:entries_end]
     else:
@@ -552,7 +543,7 @@ def parse_log(bin_file, output_file):
         f.write(' Entry    Time of Log            Event                      Conditions\n')
         f.write('+--------+----------------------+--------------------------+----------------------------------\n')
 
-        read_pos = align_entry(event_log,0)
+        read_pos = 0
         for entry_num in range(entries_count):
             (length, entry) = parse_entry(event_log, read_pos)
 
