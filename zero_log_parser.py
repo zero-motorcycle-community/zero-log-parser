@@ -18,6 +18,7 @@ import os
 import struct
 import string
 import codecs
+import sys
 from time import localtime, strftime, gmtime
 from collections import OrderedDict
 
@@ -92,7 +93,7 @@ class LogFile:
         return bytearray(self._data)
 
 
-def parse_entry(log_data, address):
+def parse_entry(log_data, address, unhandled):
     '''
     Parse an individual entry from a LogFile into a human readable form
     '''
@@ -482,6 +483,7 @@ def parse_entry(log_data, address):
     except:
         entry = unhandled_entry_format(message)
         entry['event'] = 'Exception caught: ' + entry['event']
+        unhandled += 1
 
     if timestamp > 0xfff:
         if USE_MBB_TIME:
@@ -493,7 +495,7 @@ def parse_entry(log_data, address):
     else:
         entry['time'] = str(timestamp)
 
-    return (length, entry)
+    return (length, entry, unhandled)
 
 
 def parse_log(bin_file, output_file):
@@ -503,14 +505,24 @@ def parse_log(bin_file, output_file):
     print('Parsing {}...'.format(bin_file))
 
     log = LogFile(bin_file)
-
+    log_type = log.unpack('char', 0x0, count=3).decode('utf-8', 'ignore')
+    if log_type not in ['MBB', 'BMS']:
+        log_type = 'Unknown Type'
     sys_info = OrderedDict()
-    sys_info['Serial number'] = log.unpack('char', 0x200, count=21).decode('utf-8')
-    sys_info['VIN'] = log.unpack('char', 0x240, count=17).decode('utf-8')
-    sys_info['Firmware rev.'] = log.unpack('uint16', 0x27b)
-    sys_info['Board rev.'] = log.unpack('uint16', 0x27d)
-    sys_info['Model'] = log.unpack('char', 0x27f, count=3).partition(b'\0')[0].decode('utf-8')
-
+    if log_type == 'MBB':
+        # ignore decode errors, static addresses may be incorrect 
+        sys_info['Serial number'] = log.unpack('char', 0x200, count=21).decode('utf-8', 'ignore')
+        sys_info['VIN'] = log.unpack('char', 0x240, count=17).decode('utf-8', 'ignore')
+        sys_info['Firmware rev.'] = log.unpack('uint16', 0x27b)
+        sys_info['Board rev.'] = log.unpack('uint16', 0x27d)
+        sys_info['Model'] = log.unpack('char', 0x27f, count=3).partition(b'\0')[0].decode('utf-8', 'ignore')
+    if log_type == 'BMS':
+        sys_info['System info'] = 'unknown'
+        # BMS static entry offsets are TBD
+    if log_type == 'Unknown Type':
+        sys_info['System info'] = 'unknown'
+        # try to parse anyway
+    
     entries_header_idx = log.index(b'\xa2\xa2\xa2\xa2')
     entries_end = log.unpack('uint32', 0x4, offset=entries_header_idx)
     entries_start = log.unpack('uint32', 0x8, offset=entries_header_idx)
@@ -531,7 +543,7 @@ def parse_log(bin_file, output_file):
     print('{} entries found ({} claimed)'.format(entries_count, claimed_entries_count))
 
     with codecs.open(output_file, 'w', 'utf-8-sig') as f:
-        f.write('Zero MBB log\n')
+        f.write('Zero ' + log_type + ' log\n')
         f.write('\n')
 
         for k, v in sys_info.items():
@@ -544,8 +556,9 @@ def parse_log(bin_file, output_file):
         f.write('+--------+----------------------+--------------------------+----------------------------------\n')
 
         read_pos = 0
+        unhandled = 0
         for entry_num in range(entries_count):
-            (length, entry) = parse_entry(event_log, read_pos)
+            (length, entry, unhandled) = parse_entry(event_log, read_pos, unhandled)
 
             entry['line'] = entry_num + 1
 
@@ -558,6 +571,8 @@ def parse_log(bin_file, output_file):
 
         f.write('\n')
 
+    if unhandled > 0:
+        print('{} unknown entries were not decoded'.format(unhandled))
     print('Saved to {}'.format(output_file))
 
 
