@@ -198,6 +198,8 @@ def parse_entry(log_data, address, unhandled):
             'ambient_temp': BinaryTools.unpack('int16', x, 0x15),
             'odometer': BinaryTools.unpack('uint32', x, 0x17),
         }
+        c.write(strftime('%s', gmtime(timestamp - 7 * 60 * 60)))
+        c.write((';Riding  ;{battery_current:4d};{soc:3d};{pack_temp_hi:4d};{pack_temp_low:4d};{ambient_temp:4d};{pack_voltage:7.3f};{rpm:5d};{odometer:5d}\n').format(**fields))
         return {
             'event': 'Riding',
             'conditions': ('PackTemp: h {pack_temp_hi}C, l {pack_temp_low}C, '
@@ -224,7 +226,8 @@ def parse_entry(log_data, address, unhandled):
             'mods': BinaryTools.unpack('uint8', x, 0x0c),
             'ambient_temp': BinaryTools.unpack('int8', x, 0x0d),
         }
-
+        c.write(strftime('%s', gmtime(timestamp - 7 * 60 * 60)))
+        c.write((';Charging;{battery_current:4d};{soc:3d};{pack_temp_hi:4d};{pack_temp_low:4d};{ambient_temp:4d};{pack_voltage:7.3f};;\n').format(**fields))
         return {
             'event': 'Charging',
             'conditions': ('PackTemp: h {pack_temp_hi}C, l {pack_temp_low}C, '
@@ -580,6 +583,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('bin_file', help='Zero *.bin log to decode')
     parser.add_argument('-o', '--output', help='decoded log filename')
+    parser.add_argument('-c', '--csv', help='CSV Filename')
     args = parser.parse_args()
 
     log_file = args.bin_file
@@ -588,4 +592,12 @@ if __name__ == '__main__':
     else:
         output_file = os.path.splitext(args.bin_file)[0] + '.txt'
 
-    parse_log(log_file, output_file)
+    if args.csv:
+        csv_file = args.csv
+    else:
+        csv_file = os.path.splitext(args.bin_file)[0] + '.csv'
+
+    with codecs.open(csv_file, 'w', 'utf-8-sig') as c:
+        c.write('Timestamp ;Rid/Char; AMP;SOC;pthi;ptlo;ambi;PacVolt; RPM ; ODO \n')
+        parse_log(log_file, output_file)
+
