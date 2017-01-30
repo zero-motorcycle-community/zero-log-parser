@@ -597,7 +597,7 @@ if __name__ == '__main__':
     else:
         csv_file = os.path.splitext(args.bin_file)[0] + '.csv'
 
-    with codecs.open(csv_file, 'w', 'utf-8-sig') as c:
+    with codecs.open(csv_file, 'w', 'utf-8-sig' ) as c:
         c.write('Timestamp ;Rid/Char; AMP;SOC;pthi;ptlo;ambi;PacVolt; RPM ; ODO \n')
         parse_log(log_file, output_file)
 
