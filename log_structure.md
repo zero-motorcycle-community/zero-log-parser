@@ -10,7 +10,7 @@ Address    | Length | Contents
 0x00000240 | 17     | VIN number
 0x0000027b | 2      | Firmware revision
 0x0000027d | 2      | Board revision
-0x0000027f | 3      | Bike model (`SS`, `SR`, `DS`, *FX?*)
+0x0000027f | 3      | Bike model (`SS`, `SR`, `DS`, 'FX')
 
 
 ## Log sections (located by header sequence)
@@ -59,6 +59,7 @@ Address    | Length | Contents
 0x0000000e | 4      | `0xa1 0xa1 0xa1 0xa1` *(header / seperator?)*
 0x00000012 | 20     | *First run date?*
 0x00000300 | 21     | Serial number
+0x00000320 | 8      | Pack serial number
 0x0000036a | 4      | `0xa0 0xa0 0xa0 0xa0` *(header / seperator?)*
 0x0000036e | 20     | *Date / time - unknown, but close to time @ 0x00000012*
 0x00000500 | 4      | `0xa3 0xa3 0xa3 0xa3` *(header / seperator?)*
@@ -75,7 +76,7 @@ Offset | Length    | Contents
 0x01   | 1         | Entry length (including header byte)
 0x02   | 1         | Entry type - see following section
 0x03   | 4         | Timestamp (epoch)
-0x07   | *variabe* | Entry data
+0x07   | *variable* | Entry data
 
 Note that the entry appears to be encoded in some format starting from the entry type onwards (ie Entry type, timestamp, Entry data). Any bytes of 0xFE are xor'ed with the next byte -1.
 
