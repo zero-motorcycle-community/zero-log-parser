@@ -23,8 +23,13 @@ from time import localtime, strftime, gmtime
 from collections import OrderedDict
 
 
+import Gnuplot, Gnuplot.funcutils
+#from numpy import *
+
 TIME_FORMAT = '%m/%d/%Y %H:%M:%S'
-USE_MBB_TIME = True
+CSV_TIME_FORMAT = '%X'
+CSV_TIME_FORMAT = '%d/%m/%Y\t%H:%M:%S'
+USE_MBB_TIME = False
 
 
 class BinaryTools:
@@ -198,7 +203,8 @@ def parse_entry(log_data, address, unhandled):
             'ambient_temp': BinaryTools.unpack('int16', x, 0x15),
             'odometer': BinaryTools.unpack('uint32', x, 0x17),
         }
-        c.write(strftime('%s', gmtime(timestamp - 7 * 60 * 60)))
+        c.write(strftime(CSV_TIME_FORMAT, localtime(timestamp)))
+#        c.write(('{line:05d}').format(*entry_num))
         c.write((';Riding  ;{battery_current:4d};{soc:3d};{pack_temp_hi:4d};{pack_temp_low:4d};{ambient_temp:4d};{pack_voltage:7.3f};{rpm:5d};{odometer:5d}\n').format(**fields))
         return {
             'event': 'Riding',
@@ -226,8 +232,8 @@ def parse_entry(log_data, address, unhandled):
             'mods': BinaryTools.unpack('uint8', x, 0x0c),
             'ambient_temp': BinaryTools.unpack('int8', x, 0x0d),
         }
-        c.write(strftime('%s', gmtime(timestamp - 7 * 60 * 60)))
-        c.write((';Charging;{battery_current:4d};{soc:3d};{pack_temp_hi:4d};{pack_temp_low:4d};{ambient_temp:4d};{pack_voltage:7.3f};;\n').format(**fields))
+#        c.write(strftime(CSV_TIME_FORMAT, localtime(timestamp)))
+#        c.write((';Charging;{battery_current:4d};{soc:3d};{pack_temp_hi:4d};{pack_temp_low:4d};{ambient_temp:4d};{pack_voltage:7.3f};;\n').format(**fields))
         return {
             'event': 'Charging',
             'conditions': ('PackTemp: h {pack_temp_hi}C, l {pack_temp_low}C, '
@@ -596,6 +602,14 @@ if __name__ == '__main__':
         csv_file = args.csv
     else:
         csv_file = os.path.splitext(args.bin_file)[0] + '.csv'
+
+    g = Gnuplot.Gnuplot(debug=1)
+#    g.title('A simple example')
+#    g('set data style linespoints')
+#    g('set terminal png crop size 4000,500')
+#    g('set grid back xtics ytics')
+#    g('set key top left')
+
 
     with codecs.open(csv_file, 'w', 'utf-8-sig' ) as c:
         c.write('Timestamp ;Rid/Char; AMP;SOC;pthi;ptlo;ambi;PacVolt; RPM ; ODO\n')
