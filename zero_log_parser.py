@@ -21,6 +21,7 @@ import codecs
 import sys
 from time import localtime, strftime, gmtime
 from collections import OrderedDict
+from math import trunc
 
 
 TIME_FORMAT = '%m/%d/%Y %H:%M:%S'
@@ -114,32 +115,30 @@ def parse_entry(log_data, address, unhandled):
     message = unescaped_block[0x05:]
     
     def bms_discharge_level(x):
-        # I: condition is calculated, algorithm and meaning unknown +/- 20% typical error in this version
-        # https://docs.google.com/spreadsheets/d/1FakPqygN6oABVeRi1yUL-SkGfUGATJ7Bj3bwQjbsqRw/edit?usp=sharing 
         bike = {
             0x01 : 'Bike On',
             0x02 : 'Charge',
             0x03 : 'Idle'
         }
         fields = {
-            'AH' : BinaryTools.unpack('uint32', x, 0x06)/1000000,
+            'AH' : trunc(BinaryTools.unpack('uint32', x, 0x06)/1000000.0),
             'B': BinaryTools.unpack('uint16', x, 0x02) - BinaryTools.unpack('uint16', x, 0x0),
-            'I': (BinaryTools.unpack('uint16', x, 0x14) - BinaryTools.unpack('uint16', x, 0x0)) * 0.423,
+            'I': trunc(BinaryTools.unpack('int32', x, 0x10)/1000000.0),
             'L': BinaryTools.unpack('uint16', x, 0x0),
             'H': BinaryTools.unpack('uint16', x, 0x02),
             'PT': BinaryTools.unpack('uint8', x, 0x04),
             'BT': BinaryTools.unpack('uint8', x, 0x05),
             'SOC': BinaryTools.unpack('uint8', x, 0x0a),            
-            'PV': BinaryTools.unpack('uint32', x, 0x0b),
+            'PV': BinaryTools.unpack('uint32', x, 0x0b),            
             'l': BinaryTools.unpack('uint16', x, 0x14),            
             'M': bike.get(BinaryTools.unpack('uint8', x, 0x0f)),
             'X': BinaryTools.unpack('uint16', x, 0x16) # not included in log, contactor voltage?
         }
         return {
             'event': 'Discharge level',
-            'conditions': ('{AH:03} AH,'            
+            'conditions': ('{AH:03.0f} AH,'            
                            ' SOC:{SOC:3d}%,'
-                           '~I:{I:3.0f}A,'
+                           ' I:{I:3.0f}A,'
                            ' L:{L},'
                            ' l:{l},'
                            ' H:{H},'
@@ -147,13 +146,13 @@ def parse_entry(log_data, address, unhandled):
                            ' PT:{PT:03d}C,'
                            ' BT:{BT:03d}C,'
                            ' PV:{PV:6d},'
-                           ' M:{M}'
+                           ' M:{M}'                         
                            ).format(**fields)
         }        
        
     def bms_charge_full(x):
         fields = {
-            'AH' : BinaryTools.unpack('uint32', x, 0x06)/1000000,
+            'AH' : trunc(BinaryTools.unpack('uint32', x, 0x06)/1000000.0),
             'B': BinaryTools.unpack('uint16', x, 0x02) - BinaryTools.unpack('uint16', x, 0x0),            
             'L': BinaryTools.unpack('uint16', x, 0x00),
             'H': BinaryTools.unpack('uint16', x, 0x02),            
@@ -164,7 +163,7 @@ def parse_entry(log_data, address, unhandled):
         }                    
         return {
             'event': 'Charged To Full',
-            'conditions': ('{AH:03} AH,'                          
+            'conditions': ('{AH:03.0f} AH,'                          
                            ' SOC: {SOC}%,'
                            '         L:{L},'
                            '         H:{H},'
@@ -177,7 +176,7 @@ def parse_entry(log_data, address, unhandled):
        
     def bms_discharge_low(x):
         fields = {
-            'AH' : BinaryTools.unpack('uint32', x, 0x06)/1000000,
+            'AH' : trunc(BinaryTools.unpack('uint32', x, 0x06)/1000000.0),
             'B': BinaryTools.unpack('uint16', x, 0x02) - BinaryTools.unpack('uint16', x, 0x0),
             'L': BinaryTools.unpack('uint16', x, 0x00),
             'H': BinaryTools.unpack('uint16', x, 0x02),            
@@ -188,7 +187,7 @@ def parse_entry(log_data, address, unhandled):
         }                    
         return {
             'event': 'Discharged To Low',
-            'conditions': ('{AH:03} AH,'
+            'conditions': ('{AH:03.0f} AH,'
                            ' SOC:{SOC:3d}%,'
                            '         L:{L},'
                            '         H:{H},'
@@ -221,7 +220,7 @@ def parse_entry(log_data, address, unhandled):
             'event': 'SOC adjusted for voltage',
             'conditions': ('old:   {old}uAH (soc:{old_soc}%), '
                            'new:   {new}uAH (soc:{new_soc}%), '
-                           'low cell: {low} mv'
+                           'low cell: {low} mV'
                            ).format(**fields)
         }        
     
@@ -233,7 +232,7 @@ def parse_entry(log_data, address, unhandled):
         }        
         return {
             'event': 'Current Sensor Zeroed',
-            'conditions': ('old: {old}mv, '
+            'conditions': ('old: {old}mV, '
                            'new: {new}mV, '
                            'corrfact: {corrfact}'
                            ).format(**fields)
@@ -284,7 +283,7 @@ def parse_entry(log_data, address, unhandled):
 
     def bms_contactor_state(x):
         if (BinaryTools.unpack('uint32', x, 0x01)):
-            prechg = (BinaryTools.unpack('uint32', x, 0x05) * 1.0 )/ (BinaryTools.unpack('uint32', x, 0x01) * 1.0) * 100
+            prechg = trunc((BinaryTools.unpack('uint32', x, 0x05) * 1.0 )/ (BinaryTools.unpack('uint32', x, 0x01) * 1.0) * 100)
         else:
             prechg = 0x0
         fields = {
@@ -296,7 +295,7 @@ def parse_entry(log_data, address, unhandled):
         }                        
         return {
             'event': '{state}'.format(**fields),
-            'conditions': ('Pack V: {pv}mv, Switched V: {sv}mV, Prechg Pct: {pc:2.0f}%, Dischg Cur: {dc}ma').format(**fields)
+            'conditions': ('Pack V: {pv}mV, Switched V: {sv}mV, Prechg Pct: {pc:2.0f}%, Dischg Cur: {dc}mA').format(**fields)
         }
         
     def bms_discharge_cut(x):
@@ -316,7 +315,7 @@ def parse_entry(log_data, address, unhandled):
         }                       
         return {
             'event': 'Contactor drive turned on',
-            'conditions': ('Pack V: {pv}mv, Switched V: {sv}mV, Duty Cycle: {dc}%').format(**fields)
+            'conditions': ('Pack V: {pv}mV, Switched V: {sv}mV, Duty Cycle: {dc}%').format(**fields)
         }
 
     def debug_message(x):
@@ -764,7 +763,7 @@ def parse_log(bin_file, output_file):
         entries_data_begin = entries_header_idx + 0x10
     except:
         entries_end = len(log.raw())
-        entries_start = 0
+        entries_start = log.index(b'\xb2')
         claimed_entries_count = 0
 
     # Handle data wrapping across the upper bound of the ring buffer
@@ -794,6 +793,7 @@ def parse_log(bin_file, output_file):
 
         read_pos = 0
         unhandled = 0
+        unknown_entries = 0
         unknown = []
         for entry_num in range(entries_count):
             (length, entry, unhandled) = parse_entry(event_log, read_pos, unhandled)
@@ -803,6 +803,7 @@ def parse_log(bin_file, output_file):
             if entry['conditions']:
                 if '???' in entry['conditions']:
                     u = entry['conditions'][0]
+                    unknown_entries += 1
                     if u not in unknown:
                         unknown.append(u)
                     entry['conditions'] = '???'
@@ -819,7 +820,7 @@ def parse_log(bin_file, output_file):
     if unhandled > 0:
         print('{} exceptions in parser'.format(unhandled))
     if unknown:
-        print('unknown entry types {}'.format(', '.join(hex(ord(x)) for x in unknown),'02x'))
+        print('{} unknown entries of types {}'.format(unknown_entries,', '.join(hex(ord(x)) for x in unknown),'02x'))
     print('Saved to {}'.format(output_file))    
 
 
