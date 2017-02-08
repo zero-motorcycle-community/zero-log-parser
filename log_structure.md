@@ -51,7 +51,7 @@ Offset     | Length     | Contents
 
 The event log file appears to be a direct memory dump from a ring buffer. All logs export as 0x3ffff bytes in length. Bikes logs which exceed this offset begin overwriting themself from the top of the log data section.
 
-# BMS log file layout (*WIP*)
+# BMS log file layout
 
 Address    | Length | Contents
 ---------- | :----: | --------
@@ -89,12 +89,154 @@ Offset | Length | Contents
 ------ | :----: | --------
 0x00   | 1      | cause of reset
 
-This is still WIP as there aren't many messages available
+### `0x2` - MBB unknown
+Offset | Length | Contents
+------ | :----: | --------
+0x00   | 2      | ???
+
+### `0x3` - BMS discharge level
+Offset | Length | Contents
+------ | :----: | --------
+0x00   | 2      | L low cell
+0x02   | 2      | H high cell
+0x04   | 1      | PT pack temp
+0x05   | 1      | BT board? temp
+0x06   | 4      | AH microamp hours
+0x0a   | 1      | SOC %
+0x0b   | 4      | PV pack voltage mv
+0x0f   | 1      | state 0x01 = 'Bike On', 0x02 = 'Charge', 0x03 = 'Idle'
+0x10   | 4      | unknown
+0x14   | 2      | l: unloaded? cell
+0x16   | 2      | unknown
+B balance = H - L
+I ?? calculated, unknown but approximately (l-L)/0.423
+
+### `0x4` - BMS charge full
+Offset | Length | Contents
+------ | :----: | --------
+0x00   | 2      | L low cell
+0x02   | 2      | H high cell
+0x04   | 1      | PT pack temp
+0x05   | 1      | BT board? temp
+0x06   | 4      | AH microamp hours
+0x0a   | 1      | SOC %
+0x0b   | 4      | PV pack voltage mv
+B balance = H - L
+
+### `0x5` - BMS unknown
+Offset | Length | Contents
+------ | :----: | --------
+0x00   | 17      | ???
+
+### `0x6` - BMS discharge low
+Offset | Length | Contents
+------ | :----: | --------
+0x00   | 2      | L low cell
+0x02   | 2      | H high cell
+0x04   | 1      | PT pack temp
+0x05   | 1      | BT board? temp
+0x06   | 4      | AH microamp hours
+0x0a   | 1      | SOC %
+0x0b   | 4      | PV pack voltage mv
+B balance = H - L
+
+### `0x8` - BMS system
+Offset | Length | Contents
+------ | :----: | --------
+0x00   | 1      | state 0 = 'Off', 1 = 'On'
 
 ### `0x09` - key state
 Offset | Length | Contents
 ------ | :----: | --------
-0x00   | 1      | state
+0x00   | 1      | state 0 = 'Off', 1 = 'On'
+
+### `0xb` - BMS SOC adjusted for voltage
+Offset | Length | Contents
+------ | :----: | --------
+0x00   | 4      | old uAH
+0x02   | 1      | old SOC
+0x04   | 4      | new uAH
+0x05   | 1      | new SOC
+0x06   | 2      | low cell mV
+
+### `0xd` - BMS Current Sensor Zeroed
+Offset | Length | Contents
+------ | :----: | --------
+0x00   | 2      | old mV
+0x02   | 2      | new mV
+0x04   | 1      | corrfact
+
+### `0xe` - BMS unknown
+Offset | Length | Contents
+------ | :----: | --------
+0x00   | 3      | ???
+
+### `0x10` - BMS Hibernate
+Offset | Length | Contents
+------ | :----: | --------
+0x00   | 1      | state 0 = 'Exiting', 1 = 'Entering'
+
+### `0x11` - BMS Chassis Isolation Fault
+Offset | Length | Contents
+------ | :----: | --------
+0x00   | 4      | ohms to cell
+0x04   | 1      | cell
+
+### `0x12` - BMS Reflash
+Offset | Length | Contents
+------ | :----: | --------
+0x00   | 1      | Rev
+0x02   | 20     | Built date time string
+
+### `0x13` - BMS Changed CAN Node ID
+Offset | Length | Contents
+------ | :----: | --------
+0x00   | 1      | old
+0x01   | 1      | new
+
+### `0x15` - BMS Contactor
+Offset | Length | Contents
+------ | :----: | --------
+0x00   | 1      | state 0 = 'Contactor was Opened 1 = 'Contactor was Closed'
+0x01   | 4      | Pack mV
+0x05   | 4      | Switched mV
+0x09   | 4      | Dischg Cur mA
+
+### `0x16` - BMS Discharge cutback
+Offset | Length | Contents
+------ | :----: | --------
+0x00   | 1      | cut % (/255*100.0)
+
+### `0x18` - BMS Contactor drive turned on
+Offset | Length | Contents
+------ | :----: | --------
+0x01   | 4      | Pack mV
+0x05   | 4      | Switched mV
+0x09   | 1      | Duty cycle %
+
+### `0x1c` - MBB unknown
+Offset | Length | Contents
+------ | :----: | --------
+0x00   | 8      | ???
+
+### `0x1e` - MBB unknown
+------ | :----: | --------
+0x00   | 4      | ???
+
+### `0x1f` - MBB unknown
+Offset | Length | Contents
+------ | :----: | --------
+0x00   | 4      | ???
+
+### `0x20` - MBB unknown
+Offset | Length | Contents
+------ | :----: | --------
+0x00   | 3      | ???
+
+### `0x26` - MBB unknown
+Offset | Length | Contents
+------ | :----: | --------
+0x00   | 6      | ???
 
 ### `0x28` - battery CAN link up
 Offset | Length | Contents
@@ -157,6 +299,11 @@ Offset | Length | Contents
 0x00   | 1      | Module type
 0x01   | 1      | Module state
 
+### `0x31` - MBB unknown
+Offset | Length | Contents
+------ | :----: | --------
+0x00   | 1      | ???
+
 ### `0x33` - battery status
 Offset | Length | Contents
 ------ | :----: | --------
@@ -172,10 +319,20 @@ Offset | Length | Contents
 0x00   | 1      | state
 0x01   | 1      | `0x01`=key switch, `0x04`=onboard charger
 
+### `0x35` - MBB unknown
+Offset | Length | Contents
+------ | :----: | --------
+0x00   | 5      | ???
+
 ### `0x36` - Sevcon power state
 Offset | Length | Contents
 ------ | :----: | --------
 0x00   | 1      | state
+
+### `0x37` - MBB unknown
+Offset | Length | Contents
+------ | :----: | --------
+0x00   | 0      | ???
 
 ### `0x38` - bluetooth state
 *(no additional data)*
