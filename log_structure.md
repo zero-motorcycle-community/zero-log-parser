@@ -56,14 +56,14 @@ The event log file appears to be a direct memory dump from a ring buffer. All lo
 Address    | Length | Contents
 ---------- | :----: | --------
 0x00000000 | 3      | `BMS`
-0x0000000e | 4      | `0xa1 0xa1 0xa1 0xa1` *(header / seperator?)*
+0x0000000e | 4      | `0xa1 0xa1 0xa1 0xa1` section header
 0x00000012 | 20     | *First run date?*
 0x00000300 | 21     | Serial number
 0x00000320 | 8      | Pack serial number
-0x0000036a | 4      | `0xa0 0xa0 0xa0 0xa0` *(header / seperator?)*
+0x0000036a | 4      | `0xa0 0xa0 0xa0 0xa0` section header
 0x0000036e | 20     | *Date / time - unknown, but close to time @ 0x00000012*
-0x00000500 | 4      | `0xa3 0xa3 0xa3 0xa3` *(header / seperator?)*
-0x00000700 | 4      | `0xa2 0xa2 0xa2 0xa2` *(header / seperator?)*
+0x00000500 | 4      | `0xa3 0xa3 0xa3 0xa3`` section header
+0x00000700 | 4      | `0xa2 0xa2 0xa2 0xa2`` section header
 0x00000704 |        | Main log begins
 
 
@@ -105,11 +105,10 @@ Offset | Length | Contents
 0x0a   | 1      | SOC %
 0x0b   | 4      | PV pack voltage mv
 0x0f   | 1      | state 0x01 = 'Bike On', 0x02 = 'Charge', 0x03 = 'Idle'
-0x10   | 4      | unknown
+0x10   | 4      | I microamps
 0x14   | 2      | l: unloaded? cell
 0x16   | 2      | unknown
 B balance = H - L
-I ?? calculated, unknown but approximately (l-L)/0.423
 
 ### `0x4` - BMS charge full
 Offset | Length | Contents
