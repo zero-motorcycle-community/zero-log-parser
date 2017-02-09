@@ -24,10 +24,8 @@ from collections import OrderedDict
 
 
 import Gnuplot, Gnuplot.funcutils
-#from numpy import *
 
 TIME_FORMAT = '%m/%d/%Y %H:%M:%S'
-CSV_TIME_FORMAT = '%X'
 CSV_TIME_FORMAT = '%d/%m/%Y\t%H:%M:%S'
 USE_MBB_TIME = False
 
@@ -204,10 +202,13 @@ def parse_entry(log_data, address, unhandled):
             'ambient_temp': BinaryTools.unpack('int16', x, 0x15),
             'odometer': BinaryTools.unpack('uint32', x, 0x17),
         }
-#        c.write(strftime(CSV_TIME_FORMAT, localtime(timestamp)))
-        csv_entry += 1
-        c.write('{:5d}'.format(csv_entry))
-        c.write((';Riding  ;{battery_current:4d};{soc:3d};{pack_temp_hi:4d};{pack_temp_low:4d};{ambient_temp:4d};{pack_voltage:7.3f};{rpm:5d};{odometer:5d}\n').format(**fields))
+
+        if log_type == 'MBB':
+#            c.write(strftime(CSV_TIME_FORMAT, localtime(timestamp)))
+            csv_entry += 1
+            c.write('{:5d}'.format(csv_entry))
+            c.write((';Riding  ;{battery_current:4d};{soc:3d};{pack_temp_hi:4d};{pack_temp_low:4d};{ambient_temp:4d};{pack_voltage:7.3f};{rpm:5d};{odometer:5d}\n').format(**fields))
+
         return {
             'event': 'Riding',
             'conditions': ('PackTemp: h {pack_temp_hi}C, l {pack_temp_low}C, '
@@ -235,10 +236,12 @@ def parse_entry(log_data, address, unhandled):
             'mods': BinaryTools.unpack('uint8', x, 0x0c),
             'ambient_temp': BinaryTools.unpack('int8', x, 0x0d),
         }
-#        c.write(strftime(CSV_TIME_FORMAT, localtime(timestamp)))
-        csv_entry += 1
-        c.write('{:5d}'.format(csv_entry))
-        c.write((';Charging;{battery_current:4d};{soc:3d};{pack_temp_hi:4d};{pack_temp_low:4d};{ambient_temp:4d};{pack_voltage:7.3f};;\n').format(**fields))
+        if log_type == 'MBB':
+#            c.write(strftime(CSV_TIME_FORMAT, localtime(timestamp)))
+            csv_entry += 1
+            c.write('{:5d}'.format(csv_entry))
+            c.write((';Charging;{battery_current:4d};{soc:3d};{pack_temp_hi:4d};{pack_temp_low:4d};{ambient_temp:4d};{pack_voltage:7.3f};;\n').format(**fields))
+
         return {
             'event': 'Charging',
             'conditions': ('PackTemp: h {pack_temp_hi}C, l {pack_temp_low}C, '
@@ -517,6 +520,7 @@ def parse_log(bin_file, output_file):
     Parse a Zero binary log file into a human readable text file
     '''
     print('Parsing {}...'.format(bin_file))
+    global log_type
 
     log = LogFile(bin_file)
     log_type = log.unpack('char', 0x0, count=3).decode('utf-8', 'ignore')
@@ -590,10 +594,13 @@ def parse_log(bin_file, output_file):
     if unhandled > 0:
         print('{} unknown entries were not decoded'.format(unhandled))
     print('Saved to {}'.format(output_file))
-    print('Saved CSV to {}'.format(csv_file))
+    if log_type == 'MBB':
+        print('Saved CSV to {}'.format(csv_file))
+        plot_csv(csv_file, png_file)
+        print('Saved PNG to {}'.format(png_file))
 
-def plot_csv(csv_file):
-    g = Gnuplot.Gnuplot(debug=0)
+def plot_csv(csv_file, png_file):
+    g = Gnuplot.Gnuplot(debug=255)
     g('set terminal png crop size 4000,500')
     g('set autoscale')
 
@@ -616,7 +623,7 @@ def plot_csv(csv_file):
     g('set ylabel "Werte"')
     g('set y2label "in C/V/A"')
 
-    g('set output "~/www/take.m120.de/Test.png"')
+    g('set output "{}"'.format(png_file))
 #   g('set yrange [-100:]')
 
     g('plot "{}" using 1:($3/2) smooth frequency t "Ampere" w lines lw 2, \
@@ -632,6 +639,7 @@ if __name__ == '__main__':
     parser.add_argument('bin_file', help='Zero *.bin log to decode')
     parser.add_argument('-o', '--output', help='decoded log filename')
     parser.add_argument('-c', '--csv', help='CSV Filename')
+    parser.add_argument('-p', '--png', help='PNG Filename')
     args = parser.parse_args()
 
     log_file = args.bin_file
@@ -645,9 +653,13 @@ if __name__ == '__main__':
     else:
         csv_file = os.path.splitext(args.bin_file)[0] + '.csv'
 
+    if args.png:
+        png_file = args.png
+    else:
+        png_file = os.path.splitext(args.bin_file)[0] + '.png'
+
     with codecs.open(csv_file, 'w', 'utf-8-sig' ) as c:
         c.write('Entry;Rid/Char; AMP;SOC;pthi;ptlo;ambi;PacVolt; RPM ; ODO\n')
         parse_log(log_file, output_file)
 
-    plot_csv(csv_file)
 
