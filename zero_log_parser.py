@@ -31,7 +31,6 @@ CSV_TIME_FORMAT = '%X'
 CSV_TIME_FORMAT = '%d/%m/%Y\t%H:%M:%S'
 USE_MBB_TIME = False
 
-
 class BinaryTools:
     '''
     Utility class for dealing with serialised data from the Zero's
@@ -117,6 +116,7 @@ def parse_entry(log_data, address, unhandled):
     timestamp = BinaryTools.unpack('uint32', unescaped_block, 0x01)
     message = unescaped_block[0x05:]
 
+
     def debug_message(x):
         return {
             'event': BinaryTools.unpack('char', x, 0x0, count=len(x) - 1).decode('utf-8'),
@@ -181,6 +181,7 @@ def parse_entry(log_data, address, unhandled):
         }
 
     def run_status(x):
+        global csv_entry
         mod_translate = {
             0x00: '00',
             0x01: '10',
@@ -203,8 +204,9 @@ def parse_entry(log_data, address, unhandled):
             'ambient_temp': BinaryTools.unpack('int16', x, 0x15),
             'odometer': BinaryTools.unpack('uint32', x, 0x17),
         }
-        c.write(strftime(CSV_TIME_FORMAT, localtime(timestamp)))
-#        c.write(('{line:05d}').format(*entry_num))
+#        c.write(strftime(CSV_TIME_FORMAT, localtime(timestamp)))
+        csv_entry += 1
+        c.write('{:5d}'.format(csv_entry))
         c.write((';Riding  ;{battery_current:4d};{soc:3d};{pack_temp_hi:4d};{pack_temp_low:4d};{ambient_temp:4d};{pack_voltage:7.3f};{rpm:5d};{odometer:5d}\n').format(**fields))
         return {
             'event': 'Riding',
@@ -223,6 +225,7 @@ def parse_entry(log_data, address, unhandled):
         }
 
     def charging_status(x):
+        global csv_entry
         fields = {
             'pack_temp_hi': BinaryTools.unpack('uint8', x, 0x00),
             'pack_temp_low': BinaryTools.unpack('uint8', x, 0x01),
@@ -233,7 +236,9 @@ def parse_entry(log_data, address, unhandled):
             'ambient_temp': BinaryTools.unpack('int8', x, 0x0d),
         }
 #        c.write(strftime(CSV_TIME_FORMAT, localtime(timestamp)))
-#        c.write((';Charging;{battery_current:4d};{soc:3d};{pack_temp_hi:4d};{pack_temp_low:4d};{ambient_temp:4d};{pack_voltage:7.3f};;\n').format(**fields))
+        csv_entry += 1
+        c.write('{:5d}'.format(csv_entry))
+        c.write((';Charging;{battery_current:4d};{soc:3d};{pack_temp_hi:4d};{pack_temp_low:4d};{ambient_temp:4d};{pack_voltage:7.3f};;\n').format(**fields))
         return {
             'event': 'Charging',
             'conditions': ('PackTemp: h {pack_temp_hi}C, l {pack_temp_low}C, '
@@ -566,6 +571,8 @@ def parse_log(bin_file, output_file):
 
         read_pos = 0
         unhandled = 0
+        global csv_entry
+        csv_entry = 0
         for entry_num in range(entries_count):
             (length, entry, unhandled) = parse_entry(event_log, read_pos, unhandled)
 
@@ -583,7 +590,42 @@ def parse_log(bin_file, output_file):
     if unhandled > 0:
         print('{} unknown entries were not decoded'.format(unhandled))
     print('Saved to {}'.format(output_file))
+    print('Saved CSV to {}'.format(csv_file))
 
+def plot_csv(csv_file):
+    g = Gnuplot.Gnuplot(debug=0)
+    g('set terminal png crop size 4000,500')
+    g('set autoscale')
+
+    g('set grid back xtics ytics')
+#   g('set key outside box')
+    g('set key top left')
+
+    g('set datafile missing "-1"')
+    g('set datafile commentschars "T#!%"')
+    g('set datafile separator ";"')
+#   g('set decimalsign ","')
+
+    g('set title "Zero Riding/Charging Log Diagramm;  Values without RMP charging "')
+
+    g('set xlabel "Entry"')
+#   g('set xdata time')
+#   g('set xtics 120 format "%b %d"')
+#   g('set format x "%s"')
+
+    g('set ylabel "Werte"')
+    g('set y2label "in C/V/A"')
+
+    g('set output "~/www/take.m120.de/Test.png"')
+#   g('set yrange [-100:]')
+
+    g('plot "{}" using 1:($3/2) smooth frequency t "Ampere" w lines lw 2, \
+        "" using 1:5 smooth frequency t "Temp C" w lines lw 2, \
+        "" using 1:8 smooth frequency t "Volt" w lines lw 2, \
+        "" using 1:($9/100) smooth frequency t "RPM * 100" w lines lw 2 ' \
+        .format(csv_file))
+
+#        "" using 1:7 smooth frequency t "AmpTemp C" w lines lw 1, \
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -603,15 +645,9 @@ if __name__ == '__main__':
     else:
         csv_file = os.path.splitext(args.bin_file)[0] + '.csv'
 
-    g = Gnuplot.Gnuplot(debug=1)
-#    g.title('A simple example')
-#    g('set data style linespoints')
-#    g('set terminal png crop size 4000,500')
-#    g('set grid back xtics ytics')
-#    g('set key top left')
-
-
     with codecs.open(csv_file, 'w', 'utf-8-sig' ) as c:
-        c.write('Timestamp ;Rid/Char; AMP;SOC;pthi;ptlo;ambi;PacVolt; RPM ; ODO\n')
+        c.write('Entry;Rid/Char; AMP;SOC;pthi;ptlo;ambi;PacVolt; RPM ; ODO\n')
         parse_log(log_file, output_file)
+
+    plot_csv(csv_file)
 
