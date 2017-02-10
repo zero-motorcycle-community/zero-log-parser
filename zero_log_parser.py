@@ -320,7 +320,6 @@ def parse_entry(log_data, address, unhandled):
             'conditions': ('Pack V: {pv}mV, Switched V: {sv}mV, Duty Cycle: {dc}%').format(**fields)
         }
 
-
     def debug_message(x):
         return {
             'event': BinaryTools.unpack('char', x, 0x0, count=len(x) - 1).decode('utf-8', 'ignore'),
@@ -841,8 +840,8 @@ def parse_log(bin_file, output_file):
         print('{} unknown entries were not decoded'.format(unhandled))
     if unknown:
         print('{} unknown entries of types {}'.format(unknown_entries,', '.join(hex(ord(x)) for x in unknown),'02x'))
-
     print('Saved to {}'.format(output_file))
+
     if log_type == 'MBB':
         print('Saved CSV to {}'.format(csv_file))
         plot_csv(csv_file, png_file)
