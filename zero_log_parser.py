@@ -23,10 +23,9 @@ from time import localtime, strftime, gmtime
 from collections import OrderedDict
 from math import trunc
 
-
 TIME_FORMAT = '%m/%d/%Y %H:%M:%S'
-USE_MBB_TIME = True
-
+CSV_TIME_FORMAT = '%d/%m/%Y\t%H:%M:%S'
+USE_MBB_TIME = False
 
 class BinaryTools:
     '''
@@ -382,6 +381,7 @@ def parse_entry(log_data, address, unhandled):
         }
 
     def run_status(x):
+        global csv_entry
         mod_translate = {
             0x00: '00',
             0x01: '10',
@@ -404,6 +404,13 @@ def parse_entry(log_data, address, unhandled):
             'ambient_temp': BinaryTools.unpack('int16', x, 0x15),
             'odometer': BinaryTools.unpack('uint32', x, 0x17),
         }
+
+        if (log_type == 'MBB') and ('c' in globals()):
+#            c.write(strftime(CSV_TIME_FORMAT, localtime(timestamp)))
+            csv_entry += 1
+            c.write('{:5d}'.format(csv_entry))
+            c.write((';Riding  ;{battery_current:4d};{soc:3d};{pack_temp_hi:4d};{pack_temp_low:4d};{ambient_temp:4d};{pack_voltage:7.3f};{rpm:5d};{odometer:5d}\n').format(**fields))
+
         return {
             'event': 'Riding',
             'conditions': ('PackTemp: h {pack_temp_hi}C, l {pack_temp_low}C, '
@@ -421,6 +428,7 @@ def parse_entry(log_data, address, unhandled):
         }
 
     def charging_status(x):
+        global csv_entry
         fields = {
             'pack_temp_hi': BinaryTools.unpack('uint8', x, 0x00),
             'pack_temp_low': BinaryTools.unpack('uint8', x, 0x01),
@@ -430,6 +438,11 @@ def parse_entry(log_data, address, unhandled):
             'mods': BinaryTools.unpack('uint8', x, 0x0c),
             'ambient_temp': BinaryTools.unpack('int8', x, 0x0d),
         }
+        if (log_type == 'MBB') and ('c' in globals()):
+#            c.write(strftime(CSV_TIME_FORMAT, localtime(timestamp)))
+            csv_entry += 1
+            c.write('{:5d}'.format(csv_entry))
+            c.write((';Charging;{battery_current:4d};{soc:3d};{pack_temp_hi:4d};{pack_temp_low:4d};{ambient_temp:4d};{pack_voltage:7.3f};;\n').format(**fields))
 
         return {
             'event': 'Charging',
@@ -734,6 +747,7 @@ def parse_log(bin_file, output_file):
     Parse a Zero binary log file into a human readable text file
     '''
     print('Parsing {}...'.format(bin_file))
+    global log_type
 
     log = LogFile(bin_file)
     log_type = log.unpack('char', 0x0, count=3).decode('utf-8', 'ignore')
@@ -747,6 +761,8 @@ def parse_log(bin_file, output_file):
         sys_info['Firmware rev.'] = log.unpack('uint16', 0x27b)
         sys_info['Board rev.'] = log.unpack('uint16', 0x27d)
         sys_info['Model'] = log.unpack('char', 0x27f, count=3).partition(b'\0')[0].decode('utf-8', 'ignore')
+        if 'c' in globals():
+            c.write('Entry;Rid/Char; AMP;SOC;pthi;ptlo;ambi;PacVolt; RPM ; ODO\n')
     if log_type == 'BMS':
         sys_info['Initial date'] = log.unpack('char', 0x12, count=20).decode('utf-8', 'ignore')    
         sys_info['BMS serial number'] = log.unpack('char', 0x300, count=21).decode('utf-8', 'ignore')
@@ -793,6 +809,8 @@ def parse_log(bin_file, output_file):
 
         read_pos = 0
         unhandled = 0
+        global csv_entry
+        csv_entry = 0
         unknown_entries = 0
         unknown = []
         for entry_num in range(entries_count):
@@ -818,16 +836,21 @@ def parse_log(bin_file, output_file):
         f.write('\n')
 
     if unhandled > 0:
-        print('{} exceptions in parser'.format(unhandled))
+        print('{} unknown entries were not decoded'.format(unhandled))
     if unknown:
         print('{} unknown entries of types {}'.format(unknown_entries,', '.join(hex(ord(x)) for x in unknown),'02x'))
-    print('Saved to {}'.format(output_file))    
+
+    print('Saved to {}'.format(output_file))
+
+    if (log_type == 'MBB') and ('c' in globals()):
+        print('Saved CSV to {}'.format(csv_file))
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('bin_file', help='Zero *.bin log to decode')
     parser.add_argument('-o', '--output', help='decoded log filename')
+    parser.add_argument('-c', '--csv', help='CSV Filename')
     args = parser.parse_args()
 
     log_file = args.bin_file
@@ -836,4 +859,14 @@ if __name__ == '__main__':
     else:
         output_file = os.path.splitext(args.bin_file)[0] + '.txt'
 
-    parse_log(log_file, output_file)
+    out_files = os.path.splitext(args.bin_file)[0]
+#    print(md5.new(out_files).hexdigest())
+
+    if args.csv:
+        csv_file = args.csv
+        with codecs.open(csv_file, 'w') as c:
+            parse_log(log_file, output_file)
+    else:
+        parse_log(log_file, output_file)
+
+
