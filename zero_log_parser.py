@@ -23,9 +23,6 @@ from time import localtime, strftime, gmtime
 from collections import OrderedDict
 from math import trunc
 
-import md5
-import Gnuplot, Gnuplot.funcutils
-
 TIME_FORMAT = '%m/%d/%Y %H:%M:%S'
 CSV_TIME_FORMAT = '%d/%m/%Y\t%H:%M:%S'
 USE_MBB_TIME = False
@@ -408,7 +405,7 @@ def parse_entry(log_data, address, unhandled):
             'odometer': BinaryTools.unpack('uint32', x, 0x17),
         }
 
-        if log_type == 'MBB':
+        if (log_type == 'MBB') and ('c' in globals()):
 #            c.write(strftime(CSV_TIME_FORMAT, localtime(timestamp)))
             csv_entry += 1
             c.write('{:5d}'.format(csv_entry))
@@ -441,7 +438,7 @@ def parse_entry(log_data, address, unhandled):
             'mods': BinaryTools.unpack('uint8', x, 0x0c),
             'ambient_temp': BinaryTools.unpack('int8', x, 0x0d),
         }
-        if log_type == 'MBB':
+        if (log_type == 'MBB') and ('c' in globals()):
 #            c.write(strftime(CSV_TIME_FORMAT, localtime(timestamp)))
             csv_entry += 1
             c.write('{:5d}'.format(csv_entry))
@@ -764,7 +761,8 @@ def parse_log(bin_file, output_file):
         sys_info['Firmware rev.'] = log.unpack('uint16', 0x27b)
         sys_info['Board rev.'] = log.unpack('uint16', 0x27d)
         sys_info['Model'] = log.unpack('char', 0x27f, count=3).partition(b'\0')[0].decode('utf-8', 'ignore')
-        c.write('Entry;Rid/Char; AMP;SOC;pthi;ptlo;ambi;PacVolt; RPM ; ODO\n')
+        if 'c' in globals():
+            c.write('Entry;Rid/Char; AMP;SOC;pthi;ptlo;ambi;PacVolt; RPM ; ODO\n')
     if log_type == 'BMS':
         sys_info['Initial date'] = log.unpack('char', 0x12, count=20).decode('utf-8', 'ignore')    
         sys_info['BMS serial number'] = log.unpack('char', 0x300, count=21).decode('utf-8', 'ignore')
@@ -844,64 +842,15 @@ def parse_log(bin_file, output_file):
 
     print('Saved to {}'.format(output_file))
 
-    if log_type == 'MBB':
+    if (log_type == 'MBB') and ('c' in globals()):
         print('Saved CSV to {}'.format(csv_file))
-        plot_csv(csv_file, png_file)
-        print('Saved PNG to {}'.format(png_file))
-    else:
-         os.remove(csv_file)
 
-def plot_csv(csv_file, png_file):
-    g = Gnuplot.Gnuplot(debug=0)
-    g('set terminal png crop size 4000,500')
-    g('set autoscale')
-
-    g('set grid back xtics ytics')
-#   g('set key outside box')
-    g('set key top left')
-
-    g('set datafile missing "-1"')
-    g('set datafile commentschars "T#!%"')
-    g('set datafile separator ";"')
-#   g('set decimalsign ","')
-
-    g('set title "Zero Riding/Charging Log Diagramm;  Values without RMP charging "')
-
-    g('set xlabel "Entry"')
-#   g('set xdata time')
-#   g('set xtics 120 format "%b %d"')
-#   g('set format x "%s"')
-
-    g('set ylabel "Werte"')
-    g('set y2label "in C/V/A"')
-
-    g('set output "{}"'.format(png_file))
-#   g('set yrange [-100:]')
-
-    g('plot "{}" using 1:($3/2) smooth frequency t "Ampere" w lines lw 2, \
-        "" using 1:4 smooth frequency t "SOC" w lines lw 2, \
-        "" using 1:5 smooth frequency t "Temp C" w lines lw 2, \
-        "" using 1:8 smooth frequency t "Volt" w lines lw 2, \
-        "" using 1:($9/100) smooth frequency t "RPM * 100" w lines lw 2 ' \
-        .format(csv_file))
-
-#    g('set terminal gif crop size 4000,500')
-#    g('set output "Test.gif"')
-#    g('plot "{}" using 1:($3/2) smooth frequency t "Ampere" w lines lw 2, \
-#        "" using 1:4 smooth frequency t "SOC" w lines lw 2, \
-#        "" using 1:5 smooth frequency t "Temp C" w lines lw 2, \
-#        "" using 1:8 smooth frequency t "Volt" w lines lw 2, \
-#        "" using 1:($9/100) smooth frequency t "RPM * 100" w lines lw 2 ' \
-#        .format(csv_file))
-
-#        "" using 1:7 smooth frequency t "AmpTemp C" w lines lw 1, \
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('bin_file', help='Zero *.bin log to decode')
     parser.add_argument('-o', '--output', help='decoded log filename')
     parser.add_argument('-c', '--csv', help='CSV Filename')
-    parser.add_argument('-p', '--png', help='PNG Filename')
     args = parser.parse_args()
 
     log_file = args.bin_file
@@ -915,15 +864,9 @@ if __name__ == '__main__':
 
     if args.csv:
         csv_file = args.csv
+        with codecs.open(csv_file, 'w') as c:
+            parse_log(log_file, output_file)
     else:
-        csv_file = md5.new(out_files).hexdigest()[:17] + out_files[17:] + '.csv'
-
-    if args.png:
-        png_file = args.png
-    else:
-        png_file = md5.new(out_files).hexdigest()[:17] + out_files[17:] + '.png'
-
-    with codecs.open(csv_file, 'w') as c:
         parse_log(log_file, output_file)
 
 
