@@ -89,10 +89,11 @@ Offset | Length | Contents
 ------ | :----: | --------
 0x00   | 1      | cause of reset
 
-### `0x2` - MBB unknown
+### `0x2` - MBB High Throttle Disable.
 Offset | Length | Contents
 ------ | :----: | --------
-0x00   | 2      | ???
+0x00   | 2      | thr in mv
+0x02   | 3      | unknown
 
 ### `0x3` - BMS discharge level
 Offset | Length | Contents
@@ -298,10 +299,11 @@ Offset | Length | Contents
 0x00   | 1      | Module type
 0x01   | 1      | Module state
 
-### `0x31` - MBB unknown
+### `0x31` - MBB BMS Isolation Fault
 Offset | Length | Contents
 ------ | :----: | --------
-0x00   | 1      | ???
+0x00   | 1      | BMS module
+0x01   | 3      | unknown
 
 ### `0x33` - battery status
 Offset | Length | Contents
