@@ -330,10 +330,10 @@ Offset | Length | Contents
 ------ | :----: | --------
 0x00   | 1      | state
 
-### `0x37` - MBB unknown
+### `0x37` - MBB BT RX buffer overflow detected
 Offset | Length | Contents
 ------ | :----: | --------
-0x00   | 0      | ???
+0x00   | 3      | unknown
 
 ### `0x38` - bluetooth state
 *(no additional data)*
