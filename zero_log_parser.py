@@ -99,14 +99,30 @@ def parse_entry(log_data, address, unhandled):
     '''
     Parse an individual entry from a LogFile into a human readable form
     '''
-    header = log_data[address]
+    try:
+        header = log_data[address]
+    #IndexError: bytearray index out of range
+    except IndexError:
+        #print "IndexError log_data[%r]: forcing header_bad"%(address)
+        header= 0
     # correct header offset as needed to prevent errors
     header_bad = header != 0xb2
     while header_bad:
         address += 1
-        header = log_data[address]
+        try:
+            header = log_data[address]
+        except IndexError:
+            #IndexError: bytearray index out of range
+            #print "IndexError log_data[%r]: forcing header_bad"%(address)
+            header= 0
+            header_bad = True
+            break
         header_bad = header != 0xb2
-    length = log_data[address + 1]
+    try:
+        length = log_data[address + 1]
+    #IndexError: bytearray index out of range
+    except IndexError:
+        length= 0
 
     unescaped_block = BinaryTools.unescape_block(log_data[address + 0x2:address + length])
 
@@ -837,3 +853,4 @@ if __name__ == '__main__':
         output_file = os.path.splitext(args.bin_file)[0] + '.txt'
 
     parse_log(log_file, output_file)
+
