@@ -220,6 +220,7 @@ Offset | Length | Contents
 0x00   | 8      | ???
 
 ### `0x1e` - MBB unknown
+Offset | Length | Contents
 ------ | :----: | --------
 0x00   | 4      | ???
 
