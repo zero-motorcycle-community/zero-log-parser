@@ -541,12 +541,13 @@ def parse_entry(log_data, address, unhandled):
         fields['diff'] = fields['sysmax'] - fields['sysmin']
         try:
             fields['prechg'] = int(fields['vcap'] * 100 / fields['modvolt'])
-        except Exception:
+        except ZeroDivisionError:
             fields['prechg'] = 0
 
         # Ensure the serial is printable
-        fields['serial'] = filter(lambda x: x in string.printable,
-                                  fields['serial'])
+        printable_chars = ''.join(c for c in str(fields['serial'])
+                                  if c not in string.printable)
+        fields['serial'] = printable_chars or fields['serial'].hex()
 
         return {
             'event': 'Module {module:02} {event}'.format(**fields),
@@ -604,7 +605,10 @@ def parse_entry(log_data, address, unhandled):
             'temp': BinaryTools.unpack('uint8', x, 0x04),
             'max_amp': BinaryTools.unpack('uint16', x, 0x05),
         }
-        fields['percent'] = fields['limit'] * 100 / fields['max_amp']
+        try:
+            fields['percent'] = fields['limit'] * 100 / fields['max_amp']
+        except ZeroDivisionError:
+            fields['percent'] = 0
 
         return {
             'event': 'Batt Dischg Cur Limited',
