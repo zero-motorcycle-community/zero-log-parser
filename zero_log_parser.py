@@ -13,7 +13,6 @@ Usage:
 
 """
 
-import argparse
 import os
 import struct
 import string
@@ -75,7 +74,7 @@ class LogFile:
     Wrapper for our raw log file
     """
 
-    def __init__(self, file_path):
+    def __init__(self, file_path: str):
         with open(file_path, 'rb') as f:
             self._data = bytearray(f.read())
 
@@ -94,7 +93,8 @@ class LogFile:
         return bytearray(self._data)
 
 
-def decode_str(log_text_segment):
+def decode_str(log_text_segment: bytearray) -> str:
+    """Decodes UTF-8 strings from a test segment, ignoring any errors"""
     return log_text_segment.decode('utf-8', 'ignore')
 
 
@@ -169,8 +169,8 @@ def parse_entry(log_data, address, unhandled):
                            ).format(**fields)
         }
 
-    def bms_charge_full(x):
-        fields = {
+    def bms_charge_event_fields(x):
+        return {
             'AH': trunc(BinaryTools.unpack('uint32', x, 0x06) / 1000000.0),
             'B': BinaryTools.unpack('uint16', x, 0x02) - BinaryTools.unpack('uint16', x, 0x0),
             'L': BinaryTools.unpack('uint16', x, 0x00),
@@ -180,6 +180,9 @@ def parse_entry(log_data, address, unhandled):
             'SOC': BinaryTools.unpack('uint8', x, 0x0a),
             'PV': BinaryTools.unpack('uint32', x, 0x0b)
         }
+
+    def bms_charge_full(x):
+        fields = bms_charge_event_fields(x)
         return {
             'event': 'Charged To Full',
             'conditions': ('{AH:03.0f} AH,'
@@ -194,16 +197,8 @@ def parse_entry(log_data, address, unhandled):
         }
 
     def bms_discharge_low(x):
-        fields = {
-            'AH': trunc(BinaryTools.unpack('uint32', x, 0x06) / 1000000.0),
-            'B': BinaryTools.unpack('uint16', x, 0x02) - BinaryTools.unpack('uint16', x, 0x0),
-            'L': BinaryTools.unpack('uint16', x, 0x00),
-            'H': BinaryTools.unpack('uint16', x, 0x02),
-            'PT': BinaryTools.unpack('uint8', x, 0x04),
-            'BT': BinaryTools.unpack('uint8', x, 0x05),
-            'SOC': BinaryTools.unpack('uint8', x, 0x0a),
-            'PV': BinaryTools.unpack('uint32', x, 0x0b)
-        }
+        fields = bms_charge_event_fields(x)
+
         return {
             'event': 'Discharged To Low',
             'conditions': ('{AH:03.0f} AH,'
@@ -757,7 +752,7 @@ def parse_entry(log_data, address, unhandled):
     return length, entry, unhandled
 
 
-def parse_log(bin_file, output_file):
+def parse_log(bin_file, output_file: str):
     """
     Parse a Zero binary log file into a human readable text file
     """
@@ -789,7 +784,7 @@ def parse_log(bin_file, output_file):
         entries_start = log.unpack('uint32', 0x8, offset=entries_header_idx)
         claimed_entries_count = log.unpack('uint32', 0xc, offset=entries_header_idx)
         entries_data_begin = entries_header_idx + 0x10
-    except Exception:
+    except ValueError:
         entries_end = len(log.raw())
         entries_start = log.index_of_sequence(b'\xb2')
         entries_data_begin = entries_start
@@ -858,15 +853,16 @@ def parse_log(bin_file, output_file):
 
 
 if __name__ == '__main__':
+    import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('bin_file', help='Zero *.bin log to decode')
     parser.add_argument('-o', '--output', help='decoded log filename')
     args = parser.parse_args()
 
-    log_file = args.bin_file
+    LOG_FILE = args.bin_file
     if args.output:
-        output_file = args.output
+        OUTPUT_FILE = args.output
     else:
-        output_file = os.path.splitext(args.bin_file)[0] + '.txt'
+        OUTPUT_FILE = os.path.splitext(args.bin_file)[0] + '.txt'
 
-    parse_log(log_file, output_file)
+    parse_log(LOG_FILE, OUTPUT_FILE)
