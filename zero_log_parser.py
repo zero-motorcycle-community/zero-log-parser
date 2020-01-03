@@ -542,7 +542,10 @@ def parse_entry(log_data, address, unhandled):
         # Ensure the serial is printable
         printable_chars = ''.join(c for c in str(fields['serial'])
                                   if c not in string.printable)
-        fields['serial'] = printable_chars or fields['serial'].hex()
+        if printable_chars:
+            fields['serial'] = printable_chars
+        elif isinstance(fields['serial'], float):
+            fields['serial'] = fields['serial'].hex()
 
         return {
             'event': 'Module {module:02} {event}'.format(**fields),
