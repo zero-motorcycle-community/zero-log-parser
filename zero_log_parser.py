@@ -822,10 +822,8 @@ def parse_log(bin_file, output_file: str):
         log_version_code = log.unpack('uint8', 0x4)
         if log_version_code == 0xb6:
             log_version = REV0
-            sys_info['VIN'] = log.unpack_str(0x240, count=17)
         elif log_version_code == 0xde:
             log_version = REV1
-            sys_info['VIN'] = log.unpack_str(0x252, count=17)
         else:
             log_version = None
             print("Unknown Log Format", log_version_code)
