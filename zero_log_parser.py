@@ -802,8 +802,9 @@ def parse_log(bin_file, output_file: str):
             log_version = REV1
             sys_info['VIN'] = log.unpack_str(0x252, count=17)
         else:
-            log_version = None
             print("Unknown Log Format", log_version_code)
+            log_version = REV0
+            sys_info['VIN'] = log.unpack_str(0x240, count=17)
         if 'VIN' not in sys_info or not BinaryTools.is_printable(sys_info['VIN']):
             print("VIN unreadable", log_version_code, sys_info['VIN'])
         sys_info['Initial date'] = log.unpack_str(0x2a, count=20)
