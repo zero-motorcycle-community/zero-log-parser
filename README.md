@@ -10,7 +10,7 @@ These may be extracted from the bike using the Zero mobile app: http://www.zerom
   * Once the pairing is working, select `Support` > `Email bike logs` and send the logs to yourself rather than / in addition to Zero Motorcycles support.
 
 ### Running
-You'll need to install Python 2 somehow from https://www.python.org/downloads/
+You'll need to install Python 3 somehow from https://www.python.org/downloads/
 
 `$ python zero_log_parser.py <*.bin file> [-o output_file]`
 
