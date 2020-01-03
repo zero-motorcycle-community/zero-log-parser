@@ -70,6 +70,21 @@ class BinaryTools:
 
         return data
 
+    @staticmethod
+    def decode_str(log_text_segment: bytearray) -> str:
+        """Decodes UTF-8 strings from a test segment, ignoring any errors"""
+        return log_text_segment.decode('utf-8', 'ignore')
+
+    @classmethod
+    def unpack_str(cls, log_text_segment: bytearray, address, count=1, offset=0) -> str:
+        """Unpacks and decodes UTF-8 strings from a test segment, ignoring any errors"""
+        unpacked = cls.unpack('char', log_text_segment, address, count, offset)
+        return cls.decode_str(unpacked.partition(b'\0')[0])
+
+    @staticmethod
+    def is_printable(bytes_or_str: str) -> bool:
+        return all(c in string.printable for c in bytes_or_str)
+
 
 # noinspection PyMissingOrEmptyDocstring
 class LogFile:
@@ -88,17 +103,21 @@ class LogFile:
         return BinaryTools.unpack(type_name, self._data, address + offset,
                                   count=count)
 
+    def decode_str(self, address, count=1, offset=0):
+        return BinaryTools.decode_str(BinaryTools.unpack('char', self._data, address + offset,
+                                                         count=count))
+
+    def unpack_str(self, address, count=1, offset=0) -> str:
+        """Unpacks and decodes UTF-8 strings from a test segment, ignoring any errors"""
+        unpacked = self.unpack('char', address, count, offset)
+        return BinaryTools.decode_str(unpacked.partition(b'\0')[0])
+
     def extract(self, start_address, length, offset=0):
         return self._data[start_address + offset:
                           start_address + length + offset]
 
     def raw(self):
         return bytearray(self._data)
-
-
-def decode_str(log_text_segment: bytearray) -> str:
-    """Decodes UTF-8 strings from a test segment, ignoring any errors"""
-    return log_text_segment.decode('utf-8', 'ignore')
 
 
 def parse_entry(log_data, address, unhandled):
@@ -280,7 +299,7 @@ def parse_entry(log_data, address, unhandled):
     def bms_reflash(x):
         fields = {
             'rev': BinaryTools.unpack('uint8', x, 0x00),
-            'build': decode_str(BinaryTools.unpack('char', x, 0x01, 20))
+            'build': BinaryTools.unpack_str(x, 0x01, 20)
         }
 
         return {
@@ -342,7 +361,7 @@ def parse_entry(log_data, address, unhandled):
 
     def debug_message(x):
         return {
-            'event': decode_str(BinaryTools.unpack('char', x, 0x0, count=len(x) - 1)),
+            'event': BinaryTools.unpack_str(x, 0x0, count=len(x) - 1),
             'conditions': ''
         }
 
@@ -534,7 +553,7 @@ def parse_entry(log_data, address, unhandled):
             'sysmin': BinaryTools.unpack('uint32', x, 0xa) / 1000.0,
             'vcap': BinaryTools.unpack('uint32', x, 0x0e) / 1000.0,
             'batcurr': BinaryTools.unpack('int16', x, 0x12),
-            'serial': BinaryTools.unpack('char', x, 0x14, count=len(x[0x14:])),
+            'serial': BinaryTools.unpack_str(x, 0x14, count=len(x[0x14:])),
         }
         fields['diff'] = fields['sysmax'] - fields['sysmin']
         try:
@@ -740,7 +759,7 @@ def parse_entry(log_data, address, unhandled):
 
     try:
         entry = entry_parser(message)
-    except Exception:
+    except Exception as e:
         entry = unhandled_entry_format(message)
         entry['event'] = 'Exception caught: ' + entry['event']
         unhandled += 1
@@ -758,6 +777,10 @@ def parse_entry(log_data, address, unhandled):
     return length, entry, unhandled
 
 
+REV0 = 0
+REV1 = 1
+
+
 def parse_log(bin_file, output_file: str):
     """
     Parse a Zero binary log file into a human readable text file
@@ -765,21 +788,54 @@ def parse_log(bin_file, output_file: str):
     print('Parsing {}...'.format(bin_file))
 
     log = LogFile(bin_file)
-    log_type = decode_str(log.unpack('char', 0x0, count=3))
+    log_type = log.unpack_str(0x0, count=3)
     if log_type not in ['MBB', 'BMS']:
         log_type = 'Unknown Type'
     sys_info = OrderedDict()
     if log_type == 'MBB':
-        # ignore decode errors, static addresses may be incorrect 
-        sys_info['Serial number'] = decode_str(log.unpack('char', 0x200, count=21))
-        sys_info['VIN'] = decode_str(log.unpack('char', 0x240, count=17))
-        sys_info['Firmware rev.'] = log.unpack('uint16', 0x27b)
-        sys_info['Board rev.'] = log.unpack('uint16', 0x27d)
-        sys_info['Model'] = decode_str(log.unpack('char', 0x27f, count=3).partition(b'\0')[0])
+        # Check for two log formats:
+        log_version_code = log.unpack('uint8', 0x4)
+        if log_version_code == 0xc0:
+            log_version = REV0
+            sys_info['VIN'] = log.unpack_str(0x240, count=17)
+        elif log_version_code == 0xde:
+            log_version = REV1
+            sys_info['VIN'] = log.unpack_str(0x252, count=17)
+        else:
+            log_version = None
+            print("Unknown Log Format", log_version_code)
+        if 'VIN' not in sys_info or not BinaryTools.is_printable(sys_info['VIN']):
+            print("VIN unreadable", log_version_code, sys_info['VIN'])
+        sys_info['Initial date'] = log.unpack_str(0x2a, count=20)
+        if log_version == REV0:
+            sys_info['Serial number'] = log.unpack_str(0x200, count=21)
+            sys_info['Firmware rev.'] = log.unpack('uint16', 0x27b)
+            sys_info['Board rev.'] = log.unpack('uint16', 0x27d)
+        elif log_version == REV1:
+            sys_info['Serial number'] = log.unpack_str(0x210, count=13) # This is a guess
+            # TODO identify Firmware rev.
+            # TODO identify Board rev.
+        model_offset = 0x27f if log_version == REV0 else 0x262
+        sys_info['Model'] = log.unpack_str(model_offset, count=3)
     elif log_type == 'BMS':
-        sys_info['Initial date'] = decode_str(log.unpack('char', 0x12, count=20))
-        sys_info['BMS serial number'] = decode_str(log.unpack('char', 0x300, count=21))
-        sys_info['Pack serial number'] = decode_str(log.unpack('char', 0x320, count=8))
+        # Check for two log formats:
+        log_version_code = log.unpack('uint8', 0x4)
+        if log_version_code == 0xb6:
+            log_version = REV0
+            sys_info['VIN'] = log.unpack_str(0x240, count=17)
+        elif log_version_code == 0xde:
+            log_version = REV1
+            sys_info['VIN'] = log.unpack_str(0x252, count=17)
+        else:
+            log_version = None
+            print("Unknown Log Format", log_version_code)
+        sys_info['Initial date'] = log.unpack_str(0x12, count=20)
+        if log_version == REV0:
+            sys_info['BMS serial number'] = log.unpack_str(0x300, count=21)
+            sys_info['Pack serial number'] = log.unpack_str(0x320, count=8)
+        elif log_version == REV1:
+            # TODO identify BMS serial number
+            sys_info['Pack serial number'] = log.unpack_str(0x331, count=8)
     elif log_type == 'Unknown Type':
         sys_info['System info'] = 'unknown'
 
