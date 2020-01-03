@@ -25,6 +25,7 @@ TIME_FORMAT = '%m/%d/%Y %H:%M:%S'
 USE_MBB_TIME = True
 
 
+# noinspection PyMissingOrEmptyDocstring
 class BinaryTools:
     """
     Utility class for dealing with serialised data from the Zero's
@@ -47,6 +48,7 @@ class BinaryTools:
 
     @staticmethod
     def unpack(type_name, buff, address, count=1, offset=0):
+        # noinspection PyAugmentAssignment
         buff = buff + bytearray(32)
         type_char = BinaryTools.TYPES[type_name.lower()]
         type_format = '<{}{}'.format(count, type_char)
@@ -69,6 +71,7 @@ class BinaryTools:
         return data
 
 
+# noinspection PyMissingOrEmptyDocstring
 class LogFile:
     """
     Wrapper for our raw log file
