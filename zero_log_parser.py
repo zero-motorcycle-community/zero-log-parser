@@ -785,7 +785,7 @@ def parse_log(bin_file, output_file: str):
     """
     Parse a Zero binary log file into a human readable text file
     """
-    print('Parsing {}...'.format(bin_file))
+    print('Parsing {}'.format(bin_file))
 
     log = LogFile(bin_file)
     log_type = log.unpack_str(0x0, count=3)
@@ -794,19 +794,20 @@ def parse_log(bin_file, output_file: str):
     sys_info = OrderedDict()
     if log_type == 'MBB':
         # Check for two log formats:
-        log_version_code = log.unpack('uint8', 0x4)
-        if log_version_code == 0xc0:
+        vin_v0 = log.unpack_str(0x240, count=17)
+        vin_v1 = log.unpack_str(0x252, count=17)
+        if vin_v0.startswith('538'):
             log_version = REV0
-            sys_info['VIN'] = log.unpack_str(0x240, count=17)
-        elif log_version_code == 0xde:
+            sys_info['VIN'] = vin_v0
+        elif vin_v1.startswith('538'):
             log_version = REV1
-            sys_info['VIN'] = log.unpack_str(0x252, count=17)
+            sys_info['VIN'] = vin_v1
         else:
-            print("Unknown Log Format", log_version_code)
+            print("Unknown Log Format")
             log_version = REV0
-            sys_info['VIN'] = log.unpack_str(0x240, count=17)
+            sys_info['VIN'] = vin_v0
         if 'VIN' not in sys_info or not BinaryTools.is_printable(sys_info['VIN']):
-            print("VIN unreadable", log_version_code, sys_info['VIN'])
+            print("VIN unreadable", sys_info['VIN'])
         sys_info['Initial date'] = log.unpack_str(0x2a, count=20)
         if log_version == REV0:
             sys_info['Serial number'] = log.unpack_str(0x200, count=21)
