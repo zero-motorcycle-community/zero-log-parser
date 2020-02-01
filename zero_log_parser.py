@@ -112,6 +112,10 @@ class LogFile:
         unpacked = self.unpack('char', address, count, offset)
         return BinaryTools.decode_str(unpacked.partition(b'\0')[0])
 
+    def is_printable(self, address, count=1, offset=0) -> bool:
+        unpacked = self.unpack('char', address, count, offset).decode('utf-8', 'ignore')
+        return BinaryTools.is_printable(unpacked) and len(unpacked) == count
+
     def extract(self, start_address, length, offset=0):
         return self._data[start_address + offset:
                           start_address + length + offset]
@@ -779,6 +783,14 @@ def parse_entry(log_data, address, unhandled):
 
 REV0 = 0
 REV1 = 1
+REV2 = 2
+
+
+def is_vin(vin: str):
+    """Whether the string matches a Zero VIN."""
+    return (BinaryTools.is_printable(vin)
+            and len(vin) == 17
+            and vin.startswith('538'))
 
 
 def parse_log(bin_file, output_file: str):
@@ -788,23 +800,30 @@ def parse_log(bin_file, output_file: str):
     print('Parsing {}'.format(bin_file))
 
     log = LogFile(bin_file)
-    log_type = log.unpack_str(0x0, count=3)
+    if log.is_printable(0x000, count=3):
+        log_type = log.unpack_str(0x000, count=3)
+    else:
+        log_type = log.unpack_str(0x00d, count=3)
     if log_type not in ['MBB', 'BMS']:
         log_type = 'Unknown Type'
     sys_info = OrderedDict()
+    log_version = REV0
     if log_type == 'MBB':
-        # Check for two log formats:
-        vin_v0 = log.unpack_str(0x240, count=17)
-        vin_v1 = log.unpack_str(0x252, count=17)
-        if vin_v0.startswith('538'):
+        # Check for log formats:
+        vin_v0 = log.unpack_str(0x240, count=17)  # v0 (Gen2)
+        vin_v1 = log.unpack_str(0x252, count=17)  # v1 (Gen2 2019+)
+        vin_v2 = log.unpack_str(0x029, count=17)  # v2 (Gen3)
+        if is_vin(vin_v0):
             log_version = REV0
             sys_info['VIN'] = vin_v0
-        elif vin_v1.startswith('538'):
+        elif is_vin(vin_v1):
             log_version = REV1
             sys_info['VIN'] = vin_v1
+        elif is_vin(vin_v2):
+            log_version = REV2
+            sys_info['VIN'] = vin_v2
         else:
             print("Unknown Log Format")
-            log_version = REV0
             sys_info['VIN'] = vin_v0
         if 'VIN' not in sys_info or not BinaryTools.is_printable(sys_info['VIN']):
             print("VIN unreadable", sys_info['VIN'])
@@ -813,11 +832,17 @@ def parse_log(bin_file, output_file: str):
             sys_info['Serial number'] = log.unpack_str(0x200, count=21)
             sys_info['Firmware rev.'] = log.unpack('uint16', 0x27b)
             sys_info['Board rev.'] = log.unpack('uint16', 0x27d)
+            model_offset = 0x27f
         elif log_version == REV1:
-            sys_info['Serial number'] = log.unpack_str(0x210, count=13) # This is a guess
+            sys_info['Serial number'] = log.unpack_str(0x210, count=13)
             # TODO identify Firmware rev.
             # TODO identify Board rev.
-        model_offset = 0x27f if log_version == REV0 else 0x262
+            model_offset = 0x262
+        elif log_version == REV2:
+            sys_info['Serial number'] = log.unpack_str(0x03C, count=13)
+            sys_info['Board rev.'] = log.unpack_str(0x05C, count=8)
+            sys_info['Firmware rev.'] = log.unpack_str(0x06b, count=7)
+            model_offset = 0x019
         sys_info['Model'] = log.unpack_str(model_offset, count=3)
     elif log_type == 'BMS':
         # Check for two log formats:
@@ -827,7 +852,6 @@ def parse_log(bin_file, output_file: str):
         elif log_version_code == 0xde:
             log_version = REV1
         else:
-            log_version = None
             print("Unknown Log Format", log_version_code)
         sys_info['Initial date'] = log.unpack_str(0x12, count=20)
         if log_version == REV0:
@@ -839,30 +863,43 @@ def parse_log(bin_file, output_file: str):
     elif log_type == 'Unknown Type':
         sys_info['System info'] = 'unknown'
 
-    # handle missing header index
-    try:
-        entries_header_idx = log.index_of_sequence(b'\xa2\xa2\xa2\xa2')
-        entries_end = log.unpack('uint32', 0x4, offset=entries_header_idx)
-        entries_start = log.unpack('uint32', 0x8, offset=entries_header_idx)
-        claimed_entries_count = log.unpack('uint32', 0xc, offset=entries_header_idx)
-        entries_data_begin = entries_header_idx + 0x10
-    except ValueError:
-        entries_end = len(log.raw())
-        entries_start = log.index_of_sequence(b'\xb2')
-        entries_data_begin = entries_start
-        claimed_entries_count = 0
+    raw_log = log.raw()
+    if log_version < REV2:
+        # handle missing header index
+        try:
+            entries_header_idx = log.index_of_sequence(b'\xa2\xa2\xa2\xa2')
+            entries_end = log.unpack('uint32', 0x4, offset=entries_header_idx)
+            entries_start = log.unpack('uint32', 0x8, offset=entries_header_idx)
+            claimed_entries_count = log.unpack('uint32', 0xc, offset=entries_header_idx)
+            entries_data_begin = entries_header_idx + 0x10
+        except ValueError:
+            entries_end = len(raw_log)
+            entries_start = log.index_of_sequence(b'\xb2')
+            entries_data_begin = entries_start
+            claimed_entries_count = 0
 
-    # Handle data wrapping across the upper bound of the ring buffer
-    if entries_start >= entries_end:
-        event_log = log.raw()[entries_start:] + \
-                    log.raw()[entries_data_begin:entries_end]
-    else:
-        event_log = log.raw()[entries_start:entries_end]
+        # Handle data wrapping across the upper bound of the ring buffer
+        if entries_start >= entries_end:
+            event_log = raw_log[entries_start:] + \
+                        raw_log[entries_data_begin:entries_end]
+        else:
+            event_log = raw_log[entries_start:entries_end]
 
-    # count entry headers
-    entries_count = event_log.count(b'\xb2')
+        # count entry headers
+        entries_count = event_log.count(b'\xb2')
 
-    print('{} entries found ({} claimed)'.format(entries_count, claimed_entries_count))
+        print('{} entries found ({} claimed)'.format(entries_count, claimed_entries_count))
+    elif log_version == REV2:
+        entries_start = 0x0
+        entries_data_begin = 0x0
+        entries_end = len(raw_log)
+        # Handle data wrapping across the upper bound of the ring buffer
+        if entries_start >= entries_end:
+            event_log = raw_log[entries_start:] + \
+                        raw_log[entries_data_begin:entries_end]
+        else:
+            event_log = raw_log[entries_start:entries_end]
+
 
     with codecs.open(output_file, 'w', 'utf-8-sig') as f:
         f.write('Zero ' + log_type + ' log\n')
