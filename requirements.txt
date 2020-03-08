@@ -1,0 +1,2 @@
+ddt==1.2.2
+-e git+git@github.com:zero-motorcycle-community/zero-log-parser.git@8768c6810e4514dbe344f8386876bc410c924b96#egg=Zero_log_parser
