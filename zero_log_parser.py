@@ -835,9 +835,9 @@ def parse_log(bin_file, output_file: str):
             model_offset = 0x27f
         elif log_version == REV1:
             sys_info['Serial number'] = log.unpack_str(0x210, count=13)
-            # TODO identify Firmware rev.
+            sys_info['Firmware rev.'] = log.unpack('uint16', 0x266)
             # TODO identify Board rev.
-            model_offset = 0x262
+            model_offset = 0x26B
         elif log_version == REV2:
             sys_info['Serial number'] = log.unpack_str(0x03C, count=13)
             sys_info['Board rev.'] = log.unpack_str(0x05C, count=8)
