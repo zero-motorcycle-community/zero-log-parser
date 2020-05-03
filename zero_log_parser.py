@@ -730,12 +730,16 @@ def parse_log(bin_file, output_file: str):
     print('Parsing {}'.format(bin_file))
 
     log = LogFile(bin_file)
-    if log.is_printable(0x000, count=3):
-        log_type = log.unpack_str(0x000, count=3)
-    else:
-        log_type = log.unpack_str(0x00d, count=3)
-    if log_type not in ['MBB', 'BMS']:
-        log_type = 'Unknown Type'
+    log_type = get_log_type(log)
+
+    log_version, sys_info = get_version_and_header(log, log_type)
+
+    entries_count, event_log = get_entries_and_counts(log, log_version)
+
+    emit_decoded_log_file(output_file, log_type, sys_info, entries_count, event_log)
+
+
+def get_version_and_header(log, log_type):
     sys_info = OrderedDict()
     log_version = REV0
     if log_type == 'MBB':
@@ -790,7 +794,10 @@ def parse_log(bin_file, output_file: str):
             sys_info['Pack serial number'] = log.unpack_str(0x331, count=8)
     elif log_type == 'Unknown Type':
         sys_info['System info'] = 'unknown'
+    return log_version, sys_info
 
+
+def get_entries_and_counts(log, log_version):
     raw_log = log.raw()
     if log_version < REV2:
         # handle missing header index
@@ -827,7 +834,20 @@ def parse_log(bin_file, output_file: str):
                         raw_log[entries_data_begin:entries_end]
         else:
             event_log = raw_log[entries_start:entries_end]
+    return entries_count, event_log
 
+
+def get_log_type(log: LogFile):
+    if log.is_printable(0x000, count=3):
+        log_type = log.unpack_str(0x000, count=3)
+    else:
+        log_type = log.unpack_str(0x00d, count=3)
+    if log_type not in ['MBB', 'BMS']:
+        log_type = 'Unknown Type'
+    return log_type
+
+
+def emit_decoded_log_file(output_file, log_type, sys_info, entries_count, event_log):
     with codecs.open(output_file, 'wb', 'utf-8-sig') as f:
         f.write('Zero ' + log_type + ' log\n')
         f.write('\n')
@@ -870,7 +890,6 @@ def parse_log(bin_file, output_file: str):
             read_pos += length
 
         f.write('\n')
-
     if unhandled > 0:
         print('{} exceptions in parser'.format(unhandled))
     if unknown:
