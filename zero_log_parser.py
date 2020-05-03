@@ -20,6 +20,7 @@ import codecs
 from time import localtime, strftime, gmtime
 from collections import OrderedDict
 from math import trunc
+from typing import Union
 
 TIME_FORMAT = '%m/%d/%Y %H:%M:%S'
 USE_MBB_TIME = True
@@ -46,13 +47,35 @@ class BinaryTools:
         'bool': '?'
     }
 
-    @staticmethod
-    def unpack(type_name, buff, address, count=1, offset=0):
+    TYPE_CONVERSIONS = {
+        'int8': int,
+        'uint8': int,
+        'int16': int,
+        'uint16': int,
+        'int32': int,
+        'uint32': int,
+        'int64': int,
+        'uint64': int,
+        'float': float,
+        'double': float,
+        'char': None,  # chr
+        'bool': bool
+    }
+
+    @classmethod
+    def unpack(cls,
+               type_name: str,
+               buff: bytearray,
+               address: int,
+               count=1, offset=0) -> Union[bytearray, int, float, bool]:
         # noinspection PyAugmentAssignment
         buff = buff + bytearray(32)
-        type_char = BinaryTools.TYPES[type_name.lower()]
+        type_key = type_name.lower()
+        type_char = cls.TYPES[type_key]
+        type_convert = cls.TYPE_CONVERSIONS[type_key]
         type_format = '<{}{}'.format(count, type_char)
-        return struct.unpack_from(type_format, buff, address + offset)[0]
+        unpacked = struct.unpack_from(type_format, buff, address + offset)[0]
+        return type_convert(unpacked) if type_convert else unpacked
 
     @staticmethod
     def unescape_block(data):
@@ -124,6 +147,30 @@ class LogFile:
         return bytearray(self._data)
 
 
+def convert_mv_to_v(milli_volts: int) -> float:
+    return milli_volts / 1000.0
+
+
+def convert_ratio_to_percent(numerator: Union[int, float], denominator: Union[int, float]) -> float:
+    return numerator * 100 / denominator if denominator != 0 else 0
+
+
+def convert_bit_to_on_off(bit: int) -> str:
+    return 'On' if bit else 'Off'
+
+
+def hex_of_value(value):
+    if isinstance(value, str):
+        return value
+    if isinstance(value, float):
+        return value.hex()
+    if isinstance(value, bytearray):
+        return value.hex()
+    if isinstance(value, bytes):
+        return value.hex()
+    return str(value)
+
+
 def parse_entry(log_data, address, unhandled):
     """
     Parse an individual entry from a LogFile into a human readable form
@@ -165,34 +212,22 @@ def parse_entry(log_data, address, unhandled):
             0x02: 'Charge',
             0x03: 'Idle'
         }
-        fields = {
-            'AH': trunc(BinaryTools.unpack('uint32', x, 0x06) / 1000000.0),
-            'B': BinaryTools.unpack('uint16', x, 0x02) - BinaryTools.unpack('uint16', x, 0x0),
-            'I': trunc(BinaryTools.unpack('int32', x, 0x10) / 1000000.0),
-            'L': BinaryTools.unpack('uint16', x, 0x0),
-            'H': BinaryTools.unpack('uint16', x, 0x02),
-            'PT': BinaryTools.unpack('uint8', x, 0x04),
-            'BT': BinaryTools.unpack('uint8', x, 0x05),
-            'SOC': BinaryTools.unpack('uint8', x, 0x0a),
-            'PV': BinaryTools.unpack('uint32', x, 0x0b),
-            'l': BinaryTools.unpack('uint16', x, 0x14),
-            'M': bike.get(BinaryTools.unpack('uint8', x, 0x0f)),
-            'X': BinaryTools.unpack('uint16', x, 0x16)  # not included in log, contactor voltage?
-        }
         return {
             'event': 'Discharge level',
-            'conditions': ('{AH:03.0f} AH,'
-                           ' SOC:{SOC:3d}%,'
-                           ' I:{I:3.0f}A,'
-                           ' L:{L},'
-                           ' l:{l},'
-                           ' H:{H},'
-                           ' B:{B:03d},'
-                           ' PT:{PT:03d}C,'
-                           ' BT:{BT:03d}C,'
-                           ' PV:{PV:6d},'
-                           ' M:{M}'
-                           ).format(**fields)
+            'conditions':
+                '{AH:03.0f} AH, SOC:{SOC:3d}%, I:{I:3.0f}A, L:{L}, l:{l}, H:{H}, B:{B:03d}, PT:{PT:03d}C, BT:{BT:03d}C, PV:{PV:6d}, M:{M}'.format(
+                    AH=trunc(BinaryTools.unpack('uint32', x, 0x06) / 1000000.0),
+                    B=BinaryTools.unpack('uint16', x, 0x02) - BinaryTools.unpack('uint16', x, 0x0),
+                    I=trunc(BinaryTools.unpack('int32', x, 0x10) / 1000000.0),
+                    L=BinaryTools.unpack('uint16', x, 0x0),
+                    H=BinaryTools.unpack('uint16', x, 0x02),
+                    PT=BinaryTools.unpack('uint8', x, 0x04),
+                    BT=BinaryTools.unpack('uint8', x, 0x05),
+                    SOC=BinaryTools.unpack('uint8', x, 0x0a),
+                    PV=BinaryTools.unpack('uint32', x, 0x0b),
+                    l=BinaryTools.unpack('uint16', x, 0x14),
+                    M=bike.get(BinaryTools.unpack('uint8', x, 0x0f)),
+                    X=BinaryTools.unpack('uint16', x, 0x16))
         }
 
     def bms_charge_event_fields(x):
@@ -211,15 +246,9 @@ def parse_entry(log_data, address, unhandled):
         fields = bms_charge_event_fields(x)
         return {
             'event': 'Charged To Full',
-            'conditions': ('{AH:03.0f} AH,'
-                           ' SOC: {SOC}%,'
-                           '         L:{L},'
-                           '         H:{H},'
-                           ' B:{B:03d},'
-                           ' PT:{PT:03d}C,'
-                           ' BT:{BT:03d}C,'
-                           ' PV:{PV:6d}'
-                           ).format(**fields)
+            'conditions':
+                '{AH:03.0f} AH, SOC: {SOC}%,         L:{L},         H:{H}, B:{B:03d}, PT:{PT:03d}C, BT:{BT:03d}C, PV:{PV:6d}'.format_map(
+                    fields)
         }
 
     def bms_discharge_low(x):
@@ -227,41 +256,26 @@ def parse_entry(log_data, address, unhandled):
 
         return {
             'event': 'Discharged To Low',
-            'conditions': ('{AH:03.0f} AH,'
-                           ' SOC:{SOC:3d}%,'
-                           '         L:{L},'
-                           '         H:{H},'
-                           ' B:{B:03d},'
-                           ' PT:{PT:03d}C,'
-                           ' BT:{BT:03d}C,'
-                           ' PV:{PV:6d}'
-                           ).format(**fields)
+            'conditions':
+                '{AH:03.0f} AH, SOC:{SOC:3d}%,         L:{L},         H:{H}, B:{B:03d}, PT:{PT:03d}C, BT:{BT:03d}C, PV:{PV:6d}'.format_map(
+                    fields)
         }
 
     def bms_system_state(x):
-        fields = {
-            'state': 'On' if BinaryTools.unpack('bool', x, 0x0) else 'Off'
-        }
-
         return {
-            'event': 'System Turned {state}'.format(**fields),
-            'conditions': ''
+            'event': 'System Turned ' + convert_bit_to_on_off(BinaryTools.unpack('bool', x, 0x0))
         }
 
     def bms_soc_adj_voltage(x):
-        fields = {
-            'old': BinaryTools.unpack('uint32', x, 0x00),
-            'old_soc': BinaryTools.unpack('uint8', x, 0x04),
-            'new': BinaryTools.unpack('uint32', x, 0x05),
-            'new_soc': BinaryTools.unpack('uint8', x, 0x09),
-            'low': BinaryTools.unpack('uint16', x, 0x0a)
-        }
         return {
             'event': 'SOC adjusted for voltage',
-            'conditions': ('old:   {old}uAH (soc:{old_soc}%), '
-                           'new:   {new}uAH (soc:{new_soc}%), '
-                           'low cell: {low} mV'
-                           ).format(**fields)
+            'conditions':
+                'old:   {old}uAH (soc:{old_soc}%), new:   {new}uAH (soc:{new_soc}%), low cell: {low} mV'.format(
+                    old=BinaryTools.unpack('uint32', x, 0x00),
+                    old_soc=BinaryTools.unpack('uint8', x, 0x04),
+                    new=BinaryTools.unpack('uint32', x, 0x05),
+                    new_soc=BinaryTools.unpack('uint8', x, 0x09),
+                    low=BinaryTools.unpack('uint16', x, 0x0a))
         }
 
     def bms_curr_sens_zero(x):
@@ -272,54 +286,38 @@ def parse_entry(log_data, address, unhandled):
         }
         return {
             'event': 'Current Sensor Zeroed',
-            'conditions': ('old: {old}mV, '
-                           'new: {new}mV, '
-                           'corrfact: {corrfact}'
-                           ).format(**fields)
+            'conditions': 'old: {old}mV, new: {new}mV, corrfact: {corrfact}'.format(
+                old=BinaryTools.unpack('uint16', x, 0x00),
+                new=BinaryTools.unpack('uint16', x, 0x02),
+                corrfact=BinaryTools.unpack('uint8', x, 0x04))
         }
 
     def bms_state(x):
-        fields = {
-            'state': 'Entering Hibernate' if BinaryTools.unpack('bool', x,
-                                                                0x0) else 'Exiting Hibernate'
-        }
-
+        entering_hibernate = BinaryTools.unpack('bool', x, 0x0)
         return {
-            'event': '{state}'.format(**fields),
-            'conditions': ''
+            'event': ('Entering' if entering_hibernate else 'Exiting') + ' Hibernate'
         }
 
     def bms_isolation_fault(x):
-        fields = {
-            'ohms': BinaryTools.unpack('uint32', x, 0x00),
-            'cell': BinaryTools.unpack('uint8', x, 0x04)
-        }
         return {
             'event': 'Chassis Isolation Fault',
-            'conditions': ('{ohms} ohms to cell {cell}'
-                           ).format(**fields)
+            'conditions': '{ohms} ohms to cell {cell}'.format(
+                ohms=BinaryTools.unpack('uint32', x, 0x00),
+                cell=BinaryTools.unpack('uint8', x, 0x04))
         }
 
     def bms_reflash(x):
-        fields = {
-            'rev': BinaryTools.unpack('uint8', x, 0x00),
-            'build': BinaryTools.unpack_str(x, 0x01, 20)
-        }
 
-        return {
-            'event': 'BMS Reflash',
-            'conditions': 'Revision {rev}, ' 'Built {build}'.format(**fields)
-        }
+        return dict(event='BMS Reflash', conditions='Revision {rev}, ' 'Built {build}'.format(
+            rev=BinaryTools.unpack('uint8', x, 0x00),
+            build=BinaryTools.unpack_str(x, 0x01, 20)))
 
     def bms_change_can_id(x):
-        fields = {
-            'old': BinaryTools.unpack('uint8', x, 0x00),
-            'new': BinaryTools.unpack('uint8', x, 0x01)
-        }
         return {
             'event': 'Changed CAN Node ID',
-            'conditions': ('old: {old:02d}, new: {new:02d}'
-                           ).format(**fields)
+            'conditions': 'old: {old:02d}, new: {new:02d}'.format(
+                old=BinaryTools.unpack('uint8', x, 0x00),
+                new=BinaryTools.unpack('uint8', x, 0x01))
         }
 
     def bms_contactor_state(x):
@@ -328,45 +326,38 @@ def parse_entry(log_data, address, unhandled):
                     BinaryTools.unpack('uint32', x, 0x01) * 1.0) * 100)
         else:
             prechg = 0x0
-        fields = {
-            'state': 'Contactor was Closed' if BinaryTools.unpack('bool', x,
-                                                                  0x0) else 'Contactor was Opened',
-            'pv': BinaryTools.unpack('uint32', x, 0x01),
-            'sv': BinaryTools.unpack('uint32', x, 0x05),
-            'pc': prechg,
-            'dc': BinaryTools.unpack('int32', x, 0x09)
-        }
         return {
-            'event': '{state}'.format(**fields),
-            'conditions': (
-                'Pack V: {pv}mV, Switched V: {sv}mV, Prechg Pct: {pc:2.0f}%, Dischg Cur: {dc}mA').format(
-                **fields)
+            'event': '{state}'.format(
+                state='Contactor was ' +
+                      ('Closed' if BinaryTools.unpack('bool', x, 0x0) else 'Opened')),
+            'conditions':
+                'Pack V: {pv}mV, Switched V: {sv}mV, Prechg Pct: {pc:2.0f}%, Dischg Cur: {dc}mA'.format(
+                    pv=BinaryTools.unpack('uint32', x, 0x01),
+                    sv=BinaryTools.unpack('uint32', x, 0x05),
+                    pc=prechg,
+                    dc=BinaryTools.unpack('int32', x, 0x09))
         }
 
     def bms_discharge_cut(x):
-        fields = {
-            'cut': BinaryTools.unpack('uint8', x, 0x00) / 255.0 * 100
-        }
         return {
             'event': 'Discharge cutback',
-            'conditions': '{cut:2.0f}%'.format(**fields)
+            'conditions': '{cut:2.0f}%'.format(
+                cut=convert_ratio_to_percent(BinaryTools.unpack('uint8', x, 0x00), 255.0)
+            )
         }
 
     def bms_contactor_drive(x):
-        fields = {
-            'pv': BinaryTools.unpack('uint32', x, 0x01),
-            'sv': BinaryTools.unpack('uint32', x, 0x05),
-            'dc': BinaryTools.unpack('uint8', x, 0x09)
-        }
         return {
             'event': 'Contactor drive turned on',
-            'conditions': 'Pack V: {pv}mV, Switched V: {sv}mV, Duty Cycle: {dc}%'.format(**fields)
+            'conditions': 'Pack V: {pv}mV, Switched V: {sv}mV, Duty Cycle: {dc}%'.format(
+                pv=BinaryTools.unpack('uint32', x, 0x01),
+                sv=BinaryTools.unpack('uint32', x, 0x05),
+                dc=BinaryTools.unpack('uint8', x, 0x09))
         }
 
     def debug_message(x):
         return {
-            'event': BinaryTools.unpack_str(x, 0x0, count=len(x) - 1),
-            'conditions': ''
+            'event': BinaryTools.unpack_str(x, 0x0, count=len(x) - 1)
         }
 
     def board_status(x):
@@ -374,56 +365,41 @@ def parse_entry(log_data, address, unhandled):
             0x04: 'Software',
         }
 
-        fields = {
-            'cause': causes.get(BinaryTools.unpack('uint8', x, 0x00),
-                                'Unknown')
-        }
-
         return {
             'event': 'BMS Reset',
-            'conditions': '{cause}'.format(**fields)
+            'conditions': causes.get(BinaryTools.unpack('uint8', x, 0x00),
+                                     'Unknown')
         }
 
     def key_state(x):
-        fields = {
-            'state': 'On ' if BinaryTools.unpack('bool', x, 0x0) else 'Off'
-        }
+        key_on = BinaryTools.unpack('bool', x, 0x0)
 
         return {
-            'event': 'Key {state}'.format(**fields),
-            'conditions': ''
+            'event': 'Key ' + convert_bit_to_on_off(key_on) + (' ' if key_on else '')
         }
 
     def battery_can_link_up(x):
-        fields = {
-            'module': BinaryTools.unpack('uint8', x, 0x0)
-        }
-
         return {
-            'event': 'Module {module:02} CAN Link Up'.format(**fields),
-            'conditions': ''
+            'event': 'Module {module:02} CAN Link Up'.format(
+                module=BinaryTools.unpack('uint8', x, 0x0)
+            )
         }
 
     def battery_can_link_down(x):
-        fields = {
-            'module': BinaryTools.unpack('uint8', x, 0x0)
+        return {
+            'event': 'Module {module:02} CAN Link Down'.format(
+                module=BinaryTools.unpack('uint8', x, 0x0)
+            )
         }
 
+    def sevcon_can_link_up(_):
         return {
-            'event': 'Module {module:02} CAN Link Down'.format(**fields),
-            'conditions': ''
-        }
-
-    def sevcon_can_link_up(x):
-        return {
-            'event': 'Sevcon CAN Link Up',
-            'conditions': ''
+            'event': 'Sevcon CAN Link Up'
         }
 
     def sevcon_can_link_down(x):
         return {
-            'event': 'Sevcon CAN Link Down',
-            'conditions': ''
+            'event': 'Sevcon CAN Link Down'
         }
 
     def run_status(x):
@@ -434,35 +410,23 @@ def parse_entry(log_data, address, unhandled):
             0x03: '11',
         }
 
-        fields = {
-            'pack_temp_hi': BinaryTools.unpack('uint8', x, 0x0),
-            'pack_temp_low': BinaryTools.unpack('uint8', x, 0x1),
-            'soc': BinaryTools.unpack('uint16', x, 0x2),
-            'pack_voltage': BinaryTools.unpack('uint32', x, 0x4) / 1000.0,
-            'motor_temp': BinaryTools.unpack('int16', x, 0x8),
-            'controller_temp': BinaryTools.unpack('int16', x, 0xa),
-            'rpm': BinaryTools.unpack('uint16', x, 0xc),
-            'battery_current': BinaryTools.unpack('int16', x, 0x10),
-            'mods': mod_translate.get(BinaryTools.unpack('uint8', x, 0x12),
-                                      'Unknown'),
-            'motor_current': BinaryTools.unpack('int16', x, 0x13),
-            'ambient_temp': BinaryTools.unpack('int16', x, 0x15),
-            'odometer': BinaryTools.unpack('uint32', x, 0x17),
-        }
         return {
             'event': 'Riding',
-            'conditions': ('PackTemp: h {pack_temp_hi}C, l {pack_temp_low}C, '
-                           'PackSOC:{soc:3d}%, '
-                           'Vpack:{pack_voltage:7.3f}V, '
-                           'MotAmps:{motor_current:4d}, '
-                           'BattAmps:{battery_current:4d}, '
-                           'Mods: {mods}, '
-                           'MotTemp:{motor_temp:4d}C, '
-                           'CtrlTemp:{controller_temp:4d}C, '
-                           'AmbTemp:{ambient_temp:4d}C, '
-                           'MotRPM:{rpm:4d}, '
-                           'Odo:{odometer:5d}km'
-                           ).format(**fields)
+            'conditions':
+                'PackTemp: h {pack_temp_hi}C, l {pack_temp_low}C, PackSOC:{soc:3d}%, Vpack:{pack_voltage:7.3f}V, MotAmps:{motor_current:4d}, BattAmps:{battery_current:4d}, Mods: {mods}, MotTemp:{motor_temp:4d}C, CtrlTemp:{controller_temp:4d}C, AmbTemp:{ambient_temp:4d}C, MotRPM:{rpm:4d}, Odo:{odometer:5d}km'.format(
+                    pack_temp_hi=BinaryTools.unpack('uint8', x, 0x0),
+                    pack_temp_low=BinaryTools.unpack('uint8', x, 0x1),
+                    soc=BinaryTools.unpack('uint16', x, 0x2),
+                    pack_voltage=convert_mv_to_v(BinaryTools.unpack('uint32', x, 0x4)),
+                    motor_temp=BinaryTools.unpack('int16', x, 0x8),
+                    controller_temp=BinaryTools.unpack('int16', x, 0xa),
+                    rpm=BinaryTools.unpack('uint16', x, 0xc),
+                    battery_current=BinaryTools.unpack('int16', x, 0x10),
+                    mods=mod_translate.get(BinaryTools.unpack('uint8', x, 0x12),
+                                           'Unknown'),
+                    motor_current=BinaryTools.unpack('int16', x, 0x13),
+                    ambient_temp=BinaryTools.unpack('int16', x, 0x15),
+                    odometer=BinaryTools.unpack('uint32', x, 0x17))
         }
 
     def charging_status(x):
@@ -470,7 +434,7 @@ def parse_entry(log_data, address, unhandled):
             'pack_temp_hi': BinaryTools.unpack('uint8', x, 0x00),
             'pack_temp_low': BinaryTools.unpack('uint8', x, 0x01),
             'soc': BinaryTools.unpack('uint16', x, 0x02),
-            'pack_voltage': BinaryTools.unpack('uint32', x, 0x4) / 1000.0,
+            'pack_voltage': convert_mv_to_v(BinaryTools.unpack('uint32', x, 0x4)),
             'battery_current': BinaryTools.unpack('int8', x, 0x08),
             'mods': BinaryTools.unpack('uint8', x, 0x0c),
             'ambient_temp': BinaryTools.unpack('int8', x, 0x0d),
@@ -478,15 +442,15 @@ def parse_entry(log_data, address, unhandled):
 
         return {
             'event': 'Charging',
-            'conditions': ('PackTemp: h {pack_temp_hi}C, l {pack_temp_low}C, '
-                           'AmbTemp: {ambient_temp}C, '
-                           'PackSOC:{soc:3d}%, '
-                           'Vpack:{pack_voltage:7.3f}V, '
-                           'BattAmps: {battery_current:3d}, '
-                           'Mods: {mods:02b}, '
-                           'MbbChgEn: Yes, '
-                           'BmsChgEn: No'
-                           ).format(**fields)
+            'conditions':
+                'PackTemp: h {pack_temp_hi}C, l {pack_temp_low}C, AmbTemp: {ambient_temp}C, PackSOC:{soc:3d}%, Vpack:{pack_voltage:7.3f}V, BattAmps: {battery_current:3d}, Mods: {mods:02b}, MbbChgEn: Yes, BmsChgEn: No'.format(
+                    pack_temp_hi=BinaryTools.unpack('uint8', x, 0x00),
+                    pack_temp_low=BinaryTools.unpack('uint8', x, 0x01),
+                    soc=BinaryTools.unpack('uint16', x, 0x02),
+                    pack_voltage=convert_mv_to_v(BinaryTools.unpack('uint32', x, 0x4)),
+                    battery_current=BinaryTools.unpack('int8', x, 0x08),
+                    mods=BinaryTools.unpack('uint8', x, 0x0c),
+                    ambient_temp=BinaryTools.unpack('int8', x, 0x0d))
         }
 
     def sevcon_status(x):
@@ -496,23 +460,16 @@ def parse_entry(log_data, address, unhandled):
             0x4981: 'Throttle Fault',
         }
 
-        fields = {
-            'code': BinaryTools.unpack('uint16', x, 0x00),
-            'reg': BinaryTools.unpack('uint8', x, 0x04),
-            'sevcon_code': BinaryTools.unpack('uint16', x, 0x02),
-            'data': ' '.join(['{:02X}'.format(c) for c in x[5:]]),
-            'cause': cause.get(BinaryTools.unpack('uint16', x, 0x02),
-                               'Unknown')
-        }
-
         return {
             'event': 'SEVCON CAN EMCY Frame',
-            'conditions': ('Error Code: 0x{code:04X}, '
-                           'Error Reg: 0x{reg:02X}, '
-                           'Sevcon Error Code: 0x{sevcon_code:04X}, '
-                           'Data: {data}, '
-                           '{cause}'
-                           ).format(**fields)
+            'conditions':
+                'Error Code: 0x{code:04X}, Error Reg: 0x{reg:02X}, Sevcon Error Code: 0x{sevcon_code:04X}, Data: {data}, {cause}'.format(
+                    code=BinaryTools.unpack('uint16', x, 0x00),
+                    reg=BinaryTools.unpack('uint8', x, 0x04),
+                    sevcon_code=BinaryTools.unpack('uint16', x, 0x02),
+                    data=' '.join(['{:02X}'.format(c) for c in x[5:]]),
+                    cause=cause.get(BinaryTools.unpack('uint16', x, 0x02), 'Unknown')
+                )
         }
 
     def charger_status(x):
@@ -528,187 +485,159 @@ def parse_entry(log_data, address, unhandled):
             0x03: 'External Chg 1',
         }
 
-        fields = {
-            'module': BinaryTools.unpack('uint8', x, 0x0),
-            'state': states.get(BinaryTools.unpack('uint8', x, 0x1)),
-            'name': name.get(BinaryTools.unpack('uint8', x, 0x0),
-                             'Unknown')
-        }
-
+        charger_state = BinaryTools.unpack('uint8', x, 0x1)
+        charger_id = BinaryTools.unpack('uint8', x, 0x0)
         return {
-            'event': '{name} Charger {module} {state:13s}'.format(**fields),
-            'conditions': ''
+            'event': '{name} Charger {charger_id} {state:13s}'.format(
+                charger_id=charger_id,
+                state=states.get(charger_state),
+                name=name.get(charger_id, 'Unknown')
+            )
         }
 
     def battery_status(x):
+        opening_contactor = 'Opening Contactor'
+        closing_contactor = 'Closing Contactor'
+        registered = 'Registered'
         events = {
-            0x00: 'Opening Contactor',
-            0x01: 'Closing Contactor',
-            0x02: 'Registered',
+            0x00: opening_contactor,
+            0x01: closing_contactor,
+            0x02: registered,
         }
 
         event = BinaryTools.unpack('uint8', x, 0x0)
+        event_name = events.get(event, 'Unknown (0x{:02x})'.format(event))
 
-        fields = {
-            'event': events.get(event, 'Unknown (0x{:02x})'.format(event)),
-            'module': BinaryTools.unpack('uint8', x, 0x1),
-            'modvolt': BinaryTools.unpack('uint32', x, 0x2) / 1000.0,
-            'sysmax': BinaryTools.unpack('uint32', x, 0x6) / 1000.0,
-            'sysmin': BinaryTools.unpack('uint32', x, 0xa) / 1000.0,
-            'vcap': BinaryTools.unpack('uint32', x, 0x0e) / 1000.0,
-            'batcurr': BinaryTools.unpack('int16', x, 0x12),
-            'serial': BinaryTools.unpack_str(x, 0x14, count=len(x[0x14:])),
-        }
-        fields['diff'] = fields['sysmax'] - fields['sysmin']
-        try:
-            fields['prechg'] = int(fields['vcap'] * 100 / fields['modvolt'])
-        except ZeroDivisionError:
-            fields['prechg'] = 0
-
+        mod_volt = convert_mv_to_v(BinaryTools.unpack('uint32', x, 0x2))
+        sys_max = convert_mv_to_v(BinaryTools.unpack('uint32', x, 0x6))
+        sys_min = convert_mv_to_v(BinaryTools.unpack('uint32', x, 0xa))
+        capacitor_volt = convert_mv_to_v(BinaryTools.unpack('uint32', x, 0x0e))
+        battery_current = BinaryTools.unpack('int16', x, 0x12)
+        serial_no = BinaryTools.unpack_str(x, 0x14, count=len(x[0x14:]))
         # Ensure the serial is printable
-        printable_chars = ''.join(c for c in str(fields['serial'])
-                                  if c not in string.printable)
-        if printable_chars:
-            fields['serial'] = printable_chars
-        elif isinstance(fields['serial'], float):
-            fields['serial'] = fields['serial'].hex()
+        printable_serial_no = ''.join(c for c in serial_no
+                                      if c not in string.printable)
+        if not printable_serial_no:
+            printable_serial_no = hex_of_value(serial_no)
+        if event_name == opening_contactor:
+            conditions_msg = 'vmod: {modvolt:7.3f}V, batt curr: {batcurr:3.0f}A'.format(
+                modvolt=mod_volt,
+                batcurr=battery_current
+            )
+        elif event_name == closing_contactor:
+            conditions_msg = 'vmod: {modvolt:7.3f}V, maxsys: {sysmax:7.3f}V, minsys: {sysmin:7.3f}V, diff: {diff:0.03f}V, vcap: {vcap:6.3f}V, prechg: {prechg}%'.format(
+                modvolt=mod_volt,
+                sysmax=sys_max,
+                sysmin=sys_min,
+                vcap=capacitor_volt,
+                batcurr=battery_current,
+                serial=printable_serial_no,
+                diff=sys_max - sys_min,
+                prechg=int(convert_ratio_to_percent(capacitor_volt, mod_volt)))
+        elif event_name == registered:
+            conditions_msg = 'serial: {serial},  vmod: {modvolt:3.3f}V'.format(
+                serial=printable_serial_no,
+                modvolt=mod_volt
+            )
+        else:
+            conditions_msg = ''
 
         return {
-            'event': 'Module {module:02} {event}'.format(**fields),
-            'conditions': {
-                0x00: 'vmod: {modvolt:7.3f}V, batt curr: {batcurr:3.0f}A',
-                0x01: ('vmod: {modvolt:7.3f}V, '
-                       'maxsys: {sysmax:7.3f}V, '
-                       'minsys: {sysmin:7.3f}V, '
-                       'diff: {diff:0.03f}V, '
-                       'vcap: {vcap:6.3f}V, '
-                       'prechg: {prechg}%'
-                       ),
-                0x02: 'serial: {serial},  vmod: {modvolt:3.3f}V'
-            }.get(event, '').format(**fields)
+            'event': 'Module {module:02} {event}'.format(
+                module=BinaryTools.unpack('uint8', x, 0x1),
+                event=event_name
+            ),
+            'conditions': conditions_msg
         }
 
     def power_state(x):
         sources = {
             0x01: 'Key Switch',
+            0x02: 'Ext Charger 0',
             0x03: 'Ext Charger 1',
             0x04: 'Onboard Charger',
         }
 
-        fields = {
-            'state': 'On' if BinaryTools.unpack('bool', x, 0x0) else 'Off',
-            'source': sources.get(BinaryTools.unpack('uint8', x, 0x1),
-                                  'Unknown')
-        }
+        power_on_cause = BinaryTools.unpack('uint8', x, 0x1)
+        power_on = BinaryTools.unpack('bool', x, 0x0)
 
         return {
-            'event': 'Power {state}'.format(**fields),
-            'conditions': '{source}'.format(**fields)
+            'event': 'Power ' + convert_bit_to_on_off(power_on),
+            'conditions': sources.get(power_on_cause, 'Unknown')
         }
 
     def sevcon_power_state(x):
-        fields = {
-            'state': 'On' if BinaryTools.unpack('bool', x, 0x0) else 'Off'
-        }
-
         return {
-            'event': 'Sevcon Turned {state}'.format(**fields),
-            'conditions': ''
+            'event': 'Sevcon Turned ' + convert_bit_to_on_off(BinaryTools.unpack('bool', x, 0x0))
         }
 
     def show_bluetooth_state(x):
         return {
-            'event': 'BT RX buffer reset',
-            'conditions': ''
+            'event': 'BT RX buffer reset'
         }
 
     def battery_discharge_current_limited(x):
-        fields = {
-            'limit': BinaryTools.unpack('uint16', x, 0x00),
-            'min_cell': BinaryTools.unpack('uint16', x, 0x02),
-            'temp': BinaryTools.unpack('uint8', x, 0x04),
-            'max_amp': BinaryTools.unpack('uint16', x, 0x05),
-        }
-        try:
-            fields['percent'] = fields['limit'] * 100 / fields['max_amp']
-        except ZeroDivisionError:
-            fields['percent'] = 0
+        limit = BinaryTools.unpack('uint16', x, 0x00)
+        max_amp = BinaryTools.unpack('uint16', x, 0x05)
+        percent = convert_ratio_to_percent(limit, max_amp)
 
         return {
             'event': 'Batt Dischg Cur Limited',
-            'conditions': ('{limit} A ({percent}%), '
-                           'MinCell: {min_cell}mV, '
-                           'MaxPackTemp: {temp}C'
-                           ).format(**fields)
+            'conditions':
+                '{limit} A ({percent}%), MinCell: {min_cell}mV, MaxPackTemp: {temp}C'.format(
+                    limit=limit,
+                    min_cell=BinaryTools.unpack('uint16', x, 0x02),
+                    temp=BinaryTools.unpack('uint8', x, 0x04),
+                    max_amp=max_amp,
+                    percent=percent
+                )
         }
 
     def low_chassis_isolation(x):
-        fields = {
-            'kohms': BinaryTools.unpack('uint32', x, 0x00),
-            'cell': BinaryTools.unpack('uint8', x, 0x04),
-        }
-
         return {
             'event': 'Low Chassis Isolation',
-            'conditions': '{kohms} KOhms to cell {cell}'.format(**fields)
+            'conditions': '{kohms} KOhms to cell {cell}'.format(
+                kohms=BinaryTools.unpack('uint32', x, 0x00),
+                cell=BinaryTools.unpack('uint8', x, 0x04)
+            )
         }
 
     def precharge_decay_too_steep(x):
         return {
-            'event': 'Precharge Decay Too Steep. Restarting Sevcon.',
-            'conditions': ''
+            'event': 'Precharge Decay Too Steep. Restarting Sevcon.'
         }
 
     def disarmed_status(x):
-        fields = {
-            'pack_temp_hi': BinaryTools.unpack('uint8', x, 0x0),
-            'pack_temp_low': BinaryTools.unpack('uint8', x, 0x1),
-            'soc': BinaryTools.unpack('uint16', x, 0x2),
-            'pack_voltage': BinaryTools.unpack('uint32', x, 0x4) / 1000.0,
-            'motor_temp': BinaryTools.unpack('int16', x, 0x8),
-            'controller_temp': BinaryTools.unpack('int16', x, 0xa),
-            'rpm': BinaryTools.unpack('uint16', x, 0xc),
-            'battery_current': BinaryTools.unpack('uint8', x, 0x10),
-            'mods': BinaryTools.unpack('uint8', x, 0x12),
-            'motor_current': BinaryTools.unpack('int8', x, 0x13),
-            'ambient_temp': BinaryTools.unpack('int16', x, 0x15),
-            'odometer': BinaryTools.unpack('uint32', x, 0x17),
-        }
-
         return {
             'event': 'Disarmed',
-            'conditions': ('PackTemp: h {pack_temp_hi}C, l {pack_temp_low}C, '
-                           'PackSOC:{soc:3d}%, '
-                           'Vpack:{pack_voltage:03.3f}V, '
-                           'MotAmps:{motor_current:4d}, '
-                           'BattAmps:{battery_current:4d}, '
-                           'Mods: {mods:02b}, '
-                           'MotTemp:{motor_temp:4d}C, '
-                           'CtrlTemp:{controller_temp:4d}C, '
-                           'AmbTemp:{ambient_temp:4d}C, '
-                           'MotRPM:{rpm:4d}, '
-                           'Odo:{odometer:5d}km'
-                           ).format(**fields)
+            'conditions':
+                'PackTemp: h {pack_temp_hi}C, l {pack_temp_low}C, PackSOC:{soc:3d}%, Vpack:{pack_voltage:03.3f}V, MotAmps:{motor_current:4d}, BattAmps:{battery_current:4d}, Mods: {mods:02b}, MotTemp:{motor_temp:4d}C, CtrlTemp:{controller_temp:4d}C, AmbTemp:{ambient_temp:4d}C, MotRPM:{rpm:4d}, Odo:{odometer:5d}km'.format(
+                    pack_temp_hi=BinaryTools.unpack('uint8', x, 0x0),
+                    pack_temp_low=BinaryTools.unpack('uint8', x, 0x1),
+                    soc=BinaryTools.unpack('uint16', x, 0x2),
+                    pack_voltage=convert_mv_to_v(BinaryTools.unpack('uint32', x, 0x4)),
+                    motor_temp=BinaryTools.unpack('int16', x, 0x8),
+                    controller_temp=BinaryTools.unpack('int16', x, 0xa),
+                    rpm=BinaryTools.unpack('uint16', x, 0xc),
+                    battery_current=BinaryTools.unpack('uint8', x, 0x10),
+                    mods=BinaryTools.unpack('uint8', x, 0x12),
+                    motor_current=BinaryTools.unpack('int8', x, 0x13),
+                    ambient_temp=BinaryTools.unpack('int16', x, 0x15),
+                    odometer=BinaryTools.unpack('uint32', x, 0x17))
         }
 
     def battery_contactor_closed(x):
-        fields = {
-            'module': BinaryTools.unpack('uint8', x, 0x0)
-        }
-
         return {
-            'event': 'Battery module {module:02} contactor closed'.format(**fields),
-            'conditions': ''
+            'event': 'Battery module {module:02} contactor closed'.format(
+                module=BinaryTools.unpack('uint8', x, 0x0))
         }
 
     def unhandled_entry_format(x):
-        fields = {
-            'message_type': '0x{:02x}'.format(message_type),
-            'message': ' '.join(['0x{:02x}'.format(c) for c in x])
-        }
-
         return {
-            'event': '{message_type} {message}'.format(**fields),
+            'event': '{message_type} {message}'.format(
+                message_type='0x{:02x}'.format(message_type),
+                message=' '.join(['0x{:02x}'.format(c) for c in x])
+            ),
             'conditions': chr(message_type) + '???'
         }
 
@@ -718,7 +647,8 @@ def parse_entry(log_data, address, unhandled):
         # 0x02: unknown, 2, 6350_MBB_2016-04-12, 0x02 0x2e 0x11 ???
         0x03: bms_discharge_level,
         0x04: bms_charge_full,
-        # 0x05: unknown, 17, 6890_BMS0_2016-07-03, 0x05 0x34 0x0b 0xe0 0x0c 0x35 0x2a 0x89 0x71 0xb5 0x01 0x00 0xa5 0x62 0x01 0x00 0x20 0x90 ???
+        # 0x05: unknown, 17, 6890_BMS0_2016-07-03, 0x05 0x34 0x0b 0xe0 0x0c 0x35 0x2a 0x89 0x71
+        # 0xb5 0x01 0x00 0xa5 0x62 0x01 0x00 0x20 0x90 ???
         0x06: bms_discharge_low,
         0x08: bms_system_state,
         0x09: key_state,
@@ -815,35 +745,33 @@ def parse_log(bin_file, output_file: str):
         vin_v2 = log.unpack_str(0x029, count=17)  # v2 (Gen3)
         if is_vin(vin_v0):
             log_version = REV0
-            sys_info['VIN'] = vin_v0
-        elif is_vin(vin_v1):
-            log_version = REV1
-            sys_info['VIN'] = vin_v1
-        elif is_vin(vin_v2):
-            log_version = REV2
-            sys_info['VIN'] = vin_v2
-        else:
-            print("Unknown Log Format")
-            sys_info['VIN'] = vin_v0
-        if 'VIN' not in sys_info or not BinaryTools.is_printable(sys_info['VIN']):
-            print("VIN unreadable", sys_info['VIN'])
-        sys_info['Initial date'] = log.unpack_str(0x2a, count=20)
-        if log_version == REV0:
             sys_info['Serial number'] = log.unpack_str(0x200, count=21)
+            sys_info['VIN'] = vin_v0
             sys_info['Firmware rev.'] = log.unpack('uint16', 0x27b)
             sys_info['Board rev.'] = log.unpack('uint16', 0x27d)
             model_offset = 0x27f
-        elif log_version == REV1:
+        elif is_vin(vin_v1):
+            log_version = REV1
             sys_info['Serial number'] = log.unpack_str(0x210, count=13)
+            sys_info['VIN'] = vin_v1
             sys_info['Firmware rev.'] = log.unpack('uint16', 0x266)
-            # TODO identify Board rev.
+            sys_info['Board rev.'] = log.unpack('uint16', 0x268)  # TODO confirm Board rev.
             model_offset = 0x26B
-        elif log_version == REV2:
+        elif is_vin(vin_v2):
+            log_version = REV2
             sys_info['Serial number'] = log.unpack_str(0x03C, count=13)
-            sys_info['Board rev.'] = log.unpack_str(0x05C, count=8)
+            sys_info['VIN'] = vin_v2
             sys_info['Firmware rev.'] = log.unpack_str(0x06b, count=7)
+            sys_info['Board rev.'] = log.unpack_str(0x05C, count=8)
             model_offset = 0x019
+        else:
+            print("Unknown Log Format")
+            sys_info['VIN'] = vin_v0
+            model_offset = 0x27f
+        if 'VIN' not in sys_info or not BinaryTools.is_printable(sys_info['VIN']):
+            print("VIN unreadable", sys_info['VIN'])
         sys_info['Model'] = log.unpack_str(model_offset, count=3)
+        # sys_info['Initial date'] = log.unpack_str(0x2a, count=20)
     elif log_type == 'BMS':
         # Check for two log formats:
         log_version_code = log.unpack('uint8', 0x4)
@@ -900,8 +828,7 @@ def parse_log(bin_file, output_file: str):
         else:
             event_log = raw_log[entries_start:entries_end]
 
-
-    with codecs.open(output_file, 'w', 'utf-8-sig') as f:
+    with codecs.open(output_file, 'wb', 'utf-8-sig') as f:
         f.write('Zero ' + log_type + ' log\n')
         f.write('\n')
 
@@ -924,14 +851,16 @@ def parse_log(bin_file, output_file: str):
 
             entry['line'] = entry_num + 1
 
-            if entry['conditions']:
-                if '???' in entry['conditions']:
-                    u = entry['conditions'][0]
+            conditions = entry.get('conditions')
+            if conditions:
+                if '???' in conditions:
+                    u = conditions[0]
                     unknown_entries += 1
                     if u not in unknown:
                         unknown.append(u)
-                    entry['conditions'] = '???'
-                    f.write(' {line:05d}     {time:>19s}   {event} {conditions}\n'.format(**entry))
+                    conditions = '???'
+                    f.write(
+                        ' {line:05d}     {time:>19s}   {event} {conditions}\n'.format(**entry))
                 else:
                     f.write(
                         ' {line:05d}     {time:>19s}   {event:25}  {conditions}\n'.format(**entry))
@@ -951,17 +880,24 @@ def parse_log(bin_file, output_file: str):
     print('Saved to {}'.format(output_file))
 
 
-if __name__ == '__main__':
+def default_parsed_output_for(bin_file_path: str):
+    return os.path.splitext(bin_file_path)[0] + '.txt'
+
+
+def is_log_file_path(file_path: str):
+    return file_path.endswith('.bin')
+
+
+def main():
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('bin_file', help='Zero *.bin log to decode')
     parser.add_argument('-o', '--output', help='decoded log filename')
     args = parser.parse_args()
+    log_file = args.bin_file
+    output_file = args.output or default_parsed_output_for(args.bin_file)
+    parse_log(log_file, output_file)
 
-    LOG_FILE = args.bin_file
-    if args.output:
-        OUTPUT_FILE = args.output
-    else:
-        OUTPUT_FILE = os.path.splitext(args.bin_file)[0] + '.txt'
 
-    parse_log(LOG_FILE, OUTPUT_FILE)
+if __name__ == '__main__':
+    main()
