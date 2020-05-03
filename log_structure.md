@@ -12,7 +12,6 @@ Address    | Length | Contents
 0x0000027d | 2      | Board revision
 0x0000027f | 3      | Bike model (`SS`, `SR`, `DS`, 'FX')
 
-
 ## Log sections (located by header sequence)
 
 ### Unknown *(build date?)*
@@ -62,11 +61,9 @@ Address    | Length | Contents
 0x00000320 | 8      | Pack serial number
 0x0000036a | 4      | `0xa0 0xa0 0xa0 0xa0` section header
 0x0000036e | 20     | *Date / time - unknown, but close to time @ 0x00000012*
-0x00000500 | 4      | `0xa3 0xa3 0xa3 0xa3`` section header
-0x00000700 | 4      | `0xa2 0xa2 0xa2 0xa2`` section header
+0x00000500 | 4      | `0xa3 0xa3 0xa3 0xa3` section header
+0x00000700 | 4      | `0xa2 0xa2 0xa2 0xa2` section header
 0x00000704 |        | Main log begins
-
-
 
 # Log entry format (shared by MBB and BMS)
 
@@ -74,8 +71,8 @@ Offset | Length    | Contents
 ------ | :-------: | --------
 0x00   | 1         | `0xb2` Entry header
 0x01   | 1         | Entry length (including header byte)
-0x02   | 1         | Entry type - see following section
-0x03   | 4         | Timestamp (epoch)
+0x02   | 1         | Entry type - see section `Log file entry types`
+0x03   | 4         | Timestamp (seconds since the Unix epoch)
 0x07   | *variable* | Entry data
 
 Note that the entry appears to be encoded in some format starting from the entry type onwards (ie Entry type, timestamp, Entry data). Any bytes of 0xFE are xor'ed with the next byte -1.
@@ -374,7 +371,37 @@ Offset | Length | Contents
 ------ | :----: | --------
 0x00   | 1      | module number
 
-### `0x3e` - *cell voltages?*
+### `0x3e` - cell voltages
+Offset | Length | Contents
+------ | :----: | --------
+0x00   | 2      | cell 1 mV
+0x02   | 2      | cell 2 mV
+0x04   | 2      | cell 3 mV
+0x06   | 2      | cell 4 mV
+0x08   | 2      | cell 5 mV
+0x0a   | 2      | cell 6 mV
+0x0c   | 2      | cell 7 mV
+0x10   | 2      | cell 8 mV
+0x12   | 2      | cell 9 mV
+0x14   | 2      | cell 10 mV
+0x16   | 2      | cell 11 mV
+0x18   | 2      | cell 12 mV
+0x1a   | 2      | cell 13 mV
+0x1c   | 2      | cell 14 mV
+0x1e   | 2      | cell 15 mV
+0x20   | 2      | cell 16 mV
+0x22   | 2      | cell 17 mV
+0x24   | 2      | cell 18 mV
+0x26   | 2      | cell 19 mV
+0x28   | 2      | cell 20 mV
+0x2a   | 2      | cell 21 mV
+0x2c   | 2      | cell 22 mV
+0x2e   | 2      | cell 23 mV
+0x30   | 2      | cell 24 mV
+0x32   | 2      | cell 25 mV
+0x34   | 2      | cell 26 mV
+0x36   | 2      | cell 27 mV
+0x38   | 2      | cell 28 mV
 
 ### `0xfd` - debug string
 Offset | Length     | Contents
