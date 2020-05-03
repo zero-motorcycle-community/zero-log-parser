@@ -20,10 +20,12 @@ def main():
     if not os.path.isdir(log_dir):
         print("Not a directory: " + log_dir)
         sys.exit(1)
+    replace = args.replace
+    output_suffix = '.txt' if replace else '.new.txt'
     for log_file in os.listdir(log_dir):
         if zero_log_parser.is_log_file_path(log_file):
             logfile_path = os.path.join(log_dir, log_file)
-            new_output = os.path.splitext(logfile_path)[0] + '.new.txt'
+            new_output = os.path.splitext(logfile_path)[0] + output_suffix
             zero_log_parser.parse_log(logfile_path, new_output)
 
 
