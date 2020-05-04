@@ -1,3 +1,4 @@
+import contextlib
 import io
 import os
 import unittest
@@ -39,6 +40,7 @@ class TestLogParser(unittest.TestCase):
             expected = []
             actual = []
             for expected_line, actual_line in zip(expected_lines, actual_lines):
+                self.assertFalse(self.lineIsError(actual_line))
                 if not self.lineIsError(expected_line):
                     if expected_line != actual_line:
                         expected.append(expected_line)
@@ -47,7 +49,9 @@ class TestLogParser(unittest.TestCase):
 
     def _test_can_process_logfile(self, logfile):
         output_file = os.path.join(self.test_dir, 'log_output.txt')
-        zero_log_parser.parse_log(logfile, output_file)
+        with open(os.devnull, 'w') as devnull:
+            with contextlib.redirect_stdout(devnull):
+                zero_log_parser.parse_log(logfile, output_file)
         last_output_file = zero_log_parser.default_parsed_output_for(logfile)
         self.assertFileContentsMatch(last_output_file, output_file)
 
