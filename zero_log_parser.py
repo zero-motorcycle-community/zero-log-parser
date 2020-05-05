@@ -15,6 +15,7 @@ Usage:
 
 import codecs
 import os
+import re
 import string
 import struct
 from collections import OrderedDict
@@ -119,8 +120,19 @@ class LogFile:
         with open(file_path, 'rb') as f:
             self._data = bytearray(f.read())
 
-    def index_of_sequence(self, sequence):
-        return self._data.index(sequence)
+    def index_of_sequence(self, sequence, start=None):
+        try:
+            return self._data.index(sequence, start)
+        except ValueError:
+            return None
+
+    def indexes_of_sequence(self, sequence, start=None):
+        result = []
+        last_index = self.index_of_sequence(sequence, start)
+        while last_index is not None:
+            result.append(last_index)
+            last_index = self.index_of_sequence(sequence, last_index + 1)
+        return result
 
     def unpack(self, type_name, address, count=1, offset=0):
         return BinaryTools.unpack(type_name, self._data, address + offset,
@@ -785,6 +797,8 @@ class LogData:
                 log_version = REV0
             elif log_version_code == 0xde:
                 log_version = REV1
+            elif log_version_code == 0x79:
+                log_version = REV2
             else:
                 print("Unknown Log Format", log_version_code)
             sys_info['Initial date'] = log.unpack_str(0x12, count=20)
@@ -794,6 +808,9 @@ class LogData:
             elif log_version == REV1:
                 # TODO identify BMS serial number
                 sys_info['Pack serial number'] = log.unpack_str(0x331, count=8)
+            elif log_version == REV2:
+                sys_info['BMS serial number'] = log.unpack_str(0x038, count=13)
+                sys_info['Pack serial number'] = log.unpack_str(0x06c, count=7)
         elif self.log_type == 'Unknown Type':
             sys_info['System info'] = 'unknown'
         return log_version, sys_info
@@ -826,17 +843,50 @@ class LogData:
 
             print('{} entries found ({} claimed)'.format(entries_count, claimed_entries_count))
         elif self.log_version == REV2:
-            entries_start = 0x0
-            entries_data_begin = 0x0
+            self.gen3_fencepost_byte0 = raw_log[0x0a]  # before log_type
+            self.gen3_fencepost_byte2 = raw_log[0x0c]  # before log_type
+            first_fencepost_re = re.compile(bytes([self.gen3_fencepost_byte0, ord('.'), self.gen3_fencepost_byte2]))
+            match = re.search(first_fencepost_re, raw_log)
+            if not match:
+                raise ValueError()
+            first_fencepost_value = match.group(0)[1]
+            chrg_fencepost = b'\xff\xff' + bytes('CHRG', encoding='utf8')
+            chrg_indexes = log.indexes_of_sequence(chrg_fencepost)
+            another_fencepost = b'\x80\x00\xa2\xa2\x01\x00'
             entries_end = len(raw_log)
             entries_count = 0
-            # Handle data wrapping across the upper bound of the ring buffer
-            if entries_start >= entries_end:
-                event_log = raw_log[entries_start:] + \
-                            raw_log[entries_data_begin:entries_end]
-            else:
-                event_log = raw_log[entries_start:entries_end]
+            event_log = []
+            event_start = match.start(0)
+            current_fencepost_value = first_fencepost_value
+            current_fencepost = self.event_fencepost(current_fencepost_value)
+            while event_start is not None and event_start < entries_end:
+                event_start = log.index_of_sequence(current_fencepost)
+                next_fencepost = self.next_event_fencepost(current_fencepost)
+                if event_start is not None:
+                    event_end = log.index_of_sequence(next_fencepost, event_start + 1)
+                    event_payload = raw_log[event_start + len(current_fencepost):event_end]
+                    event_log.append(event_payload)
+                    entries_count += 1
+                    current_fencepost = next_fencepost
+
         return entries_count, event_log
+
+    def event_fencepost(self, value):
+        return bytes([self.gen3_fencepost_byte0, value, self.gen3_fencepost_byte2])
+
+    def next_event_fencepost(self, previous_event_fencepost):
+        previous_value: int = 0
+        if isinstance(previous_event_fencepost, int):
+            previous_value = previous_event_fencepost
+        elif isinstance(previous_event_fencepost, bytes):
+            previous_value = previous_event_fencepost[1]
+        next_value = previous_value + 1
+        # Wraparound that avoids certain other common byte sequences:
+        if next_value == 0xfe:
+            next_value = 0xff
+        elif next_value == 0x00:
+            next_value = 0x01
+        return self.event_fencepost(next_value)
 
     header_divider = \
         '+--------+----------------------+--------------------------+----------------------------------\n'
@@ -855,35 +905,42 @@ class LogData:
             f.write(' Entry    Time of Log            Event                      Conditions\n')
             f.write(self.header_divider)
 
-            read_pos = 0
             unhandled = 0
             unknown_entries = 0
             unknown = []
-            for entry_num in range(self.entries_count):
-                (length, entry, unhandled) = parse_entry(self.entries, read_pos, unhandled)
+            if self.log_version < REV2:
+                read_pos = 0
+                for entry_num in range(self.entries_count):
+                    (length, entry, unhandled) = parse_entry(self.entries, read_pos, unhandled)
 
-                entry['line'] = entry_num + 1
+                    entry['line'] = entry_num + 1
 
-                conditions = entry.get('conditions')
-                if conditions:
-                    if '???' in conditions:
-                        u = conditions[0]
-                        unknown_entries += 1
-                        if u not in unknown:
-                            unknown.append(u)
-                        conditions = '???'
-                        f.write(
-                            ' {line:05d}     {time:>19s}   {event} {conditions}\n'.format(
-                                **entry))
+                    conditions = entry.get('conditions')
+                    if conditions:
+                        if '???' in conditions:
+                            u = conditions[0]
+                            unknown_entries += 1
+                            if u not in unknown:
+                                unknown.append(u)
+                            conditions = '???'
+                            f.write(
+                                ' {line:05d}     {time:>19s}   {event} {conditions}\n'.format(
+                                    **entry))
+                        else:
+                            f.write(
+                                ' {line:05d}     {time:>19s}   {event:25}  {conditions}\n'.format(
+                                    **entry))
                     else:
-                        f.write(
-                            ' {line:05d}     {time:>19s}   {event:25}  {conditions}\n'.format(
-                                **entry))
-                else:
-                    f.write(' {line:05d}     {time:>19s}   {event}\n'.format(**entry))
+                        f.write(' {line:05d}     {time:>19s}   {event}\n'.format(**entry))
 
-                read_pos += length
-
+                    read_pos += length
+            else:
+                for line, entry in enumerate(self.entries):
+                    event_message = BinaryTools.unpack_str(entry, 0, len(entry))
+                    f.write(' {line:05d}     {time:>19s}   {event}\n'.format(
+                        line=line,
+                        time='',
+                        event=event_message))
             f.write('\n')
         if unhandled > 0:
             print('{} exceptions in parser'.format(unhandled))
