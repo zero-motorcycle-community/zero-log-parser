@@ -163,6 +163,24 @@ class LogFile:
     def raw(self):
         return bytearray(self._data)
 
+    log_type_mbb = 'MBB'
+    log_type_bms = 'BMS'
+    log_type_unknown = 'Unknown Type'
+
+    def get_log_type(self):
+        log_type = None
+        if self.is_printable(0x000, count=3):
+            log_type = self.unpack_str(0x000, count=3)
+        elif self.is_printable(0x00d, count=3):
+            log_type = self.unpack_str(0x00d, count=3)
+        elif self.log_type_mbb in self.file_path.upper():
+            log_type = self.log_type_mbb
+        elif self.log_type_bms in self.file_path.upper():
+            log_type = self.log_type_bms
+        if log_type not in [self.log_type_mbb, self.log_type_bms]:
+            log_type = self.log_type_unknown
+        return log_type
+
 
 def convert_mv_to_v(milli_volts: int) -> float:
     return milli_volts / 1000.0
@@ -744,33 +762,16 @@ class LogData:
     entries: [str]
 
     def __init__(self, log_file: LogFile):
-        self.log_type = self.get_log_type(log_file)
+        self.log_file = log_file
+        self.log_type = log_file.get_log_type()
         self.log_version, self.header_info = self.get_version_and_header(log_file)
         self.entries_count, self.entries = self.get_entries_and_counts(log_file)
-
-    log_type_mbb = 'MBB'
-    log_type_bms = 'BMS'
-    log_type_unknown = 'Unknown Type'
-
-    @classmethod
-    def get_log_type(cls, log: LogFile):
-        log_type = None
-        if log.is_printable(0x000, count=3):
-            log_type = log.unpack_str(0x000, count=3)
-        elif log.is_printable(0x00d, count=3):
-            log_type = log.unpack_str(0x00d, count=3)
-        elif cls.log_type_mbb in log.file_path.upper():
-            log_type = cls.log_type_mbb
-        elif cls.log_type_bms in log.file_path.upper():
-            log_type = cls.log_type_bms
-        if log_type not in [cls.log_type_mbb, cls.log_type_bms]:
-            log_type = cls.log_type_unknown
-        return log_type
 
     def get_version_and_header(self, log: LogFile):
         sys_info = OrderedDict()
         log_version = REV0
-        if self.log_type == self.log_type_mbb or self.log_type == self.log_type_unknown:
+        if len(sys_info) == 0 and (self.log_type == self.log_file.log_type_mbb
+                                   or self.log_type == self.log_file.log_type_unknown):
             # Check for log formats:
             vin_v0 = log.unpack_str(0x240, count=17)  # v0 (Gen2)
             vin_v1 = log.unpack_str(0x252, count=17)  # v1 (Gen2 2019+)
@@ -804,8 +805,8 @@ class LogData:
                 print("VIN unreadable", sys_info['VIN'])
             sys_info['Model'] = log.unpack_str(model_offset, count=3)
             sys_info['Initial date'] = log.unpack_str(0x2a, count=20)
-        if len(sys_info) == 0 and (self.log_type == self.log_type_bms
-                                   or self.log_type == self.log_type_unknown):
+        if len(sys_info) == 0 and (self.log_type == self.log_file.log_type_bms
+                                   or self.log_type == self.log_file.log_type_unknown):
             # Check for two log formats:
             log_version_code = log.unpack('uint8', 0x4)
             if log_version_code == 0xb6:
