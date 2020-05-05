@@ -61,8 +61,12 @@ class TestLogParser(unittest.TestCase):
                     actual_dict[key] = value
                 except ValueError:
                     pass
-        self.assertDictEqual(expected_dict, actual_dict,
-                             msg='header metadata matches')
+        sys_info_unknown = {'System info': 'unknown'}
+        if expected_dict == sys_info_unknown:
+            self.assertNotEqual(actual_dict, sys_info_unknown)
+        else:
+            self.assertDictEqual(expected_dict, actual_dict,
+                                 msg='header metadata matches')
 
     def assertEntriesLinesMatch(self, expected_entry_lines: [str], actual_entry_lines: [str]):
         for actual_line in actual_entry_lines:
