@@ -48,8 +48,11 @@ class TestLogParser(unittest.TestCase):
         expected_dict = {}
         for line in expected_header_lines:
             if '   ' in line:
-                key, value = re.split(r'[ ]{3,}', line.strip(), 2)
-                expected_dict[key] = value
+                try:
+                    key, value = re.split(r'[ ]{3,}', line.strip(), 2)
+                    expected_dict[key] = value
+                except ValueError:
+                    pass
         actual_dict = {}
         for line in actual_header_lines:
             if '   ' in line:
