@@ -1,17 +1,19 @@
 import contextlib
 import io
 import os
+import re
 import unittest
 import shutil
 import tempfile
 
-import zero_log_parser
+import zero_log_parser as parser
 
 log_files_to_test = None
 
 
 def logfile_test_generator(logfile):
     def test(self):
+        """zero_log_parser can handle this log file."""
         self._test_can_process_logfile(logfile)
     return test
 
@@ -29,31 +31,80 @@ class TestLogParser(unittest.TestCase):
     def lineIsError(cls, line: str):
         return 'Exception caught:' in line
 
-    def assertFileContentsMatch(self, expected_path: str, actual_path: str, full_diff=False):
+    def numberFromEntryLine(self, line: str):
+        line_no = line[1:6]
+        self.assertRegex(line_no, r'^[0-9]+$', 'has a line number')
+        return line_no
+
+    def assertHeaderLinesMatch(self, expected_header_lines: [str], actual_header_lines: [str]):
+        self.assertLessEqual(len(expected_header_lines), len(actual_header_lines),
+                             msg='No fewer header lines than before')
+        expected_headers = {line for line in expected_header_lines
+                            if line != '\n' and '  ' not in line}
+        actual_headers = {line for line in actual_header_lines
+                          if line != '\n' and '  ' not in line}
+        self.assertSetEqual(expected_headers, actual_headers,
+                            msg='headers differ')
+        expected_dict = {}
+        for line in expected_header_lines:
+            if '   ' in line:
+                key, value = re.split(r'[ ]{3,}', line.strip(), 2)
+                expected_dict[key] = value
+        actual_dict = {}
+        for line in actual_header_lines:
+            if '   ' in line:
+                key, value = re.split(r'[ ]{3,}', line.strip(), 2)
+                actual_dict[key] = value
+        self.assertDictEqual(expected_dict, actual_dict,
+                             msg='header metadata matches')
+
+    def assertEntriesLinesMatch(self, expected_entry_lines: [str], actual_entry_lines: [str]):
+        for actual_line in actual_entry_lines:
+            self.assertFalse(self.lineIsError(actual_line), 'no errors in new output')
+        self.assertLessEqual(len(expected_entry_lines), len(actual_entry_lines),
+                             msg='No fewer entries than before')
+        expected_lines_by_no = {self.numberFromEntryLine(line): line[11:]
+                                for line in expected_entry_lines
+                                if len(line) > 7}
+        actual_lines_by_no = {self.numberFromEntryLine(line): line[11:]
+                              for line in actual_entry_lines
+                              if len(line) > 7}
+        for line_no, expected_line in expected_lines_by_no.items():
+            actual_line = actual_lines_by_no.get(line_no)
+            with self.subTest('lines match', line_no=line_no):
+                if ' 0x' in expected_line and ' 0x' in actual_line:
+                    pass
+                else:
+                    self.assertEqual(expected_line, actual_line,
+                                     msg='same entries at line: {}'.format(line_no))
+
+    def _test_can_process_logfile(self, logfile: str):
+        # with self.subTest('zero_log_parser can handle this log file: ' + logfile, file=logfile):
+        actual_path = os.path.join(self.test_dir, 'log_output.txt')
+        with open(os.devnull, 'w') as devnull:
+            with contextlib.redirect_stdout(devnull):
+                parser.parse_log(logfile, actual_path)
+        expected_path = parser.default_parsed_output_for(logfile)
         with io.open(expected_path, 'r') as expected_file:
             expected_lines = list(expected_file)
         with io.open(actual_path, 'r') as actual_file:
             actual_lines = list(actual_file)
-        if full_diff:
-            self.assertListEqual(expected_lines, actual_lines)
-        else:
-            expected = []
-            actual = []
-            for expected_line, actual_line in zip(expected_lines, actual_lines):
-                self.assertFalse(self.lineIsError(actual_line))
-                if not self.lineIsError(expected_line):
-                    if expected_line != actual_line:
-                        expected.append(expected_line)
-                        actual.append(actual_line)
-            self.assertListEqual(expected, actual)
+        expected_divider_index = expected_lines.index(parser.LogData.header_divider)
+        actual_divider_index = actual_lines.index(parser.LogData.header_divider)
+        # with self.subTest('headers', section='header'):
+        expected_header_lines = expected_lines[0:expected_divider_index - 3]
+        actual_divider_lines = actual_lines[0:actual_divider_index - 3]
+        self.assertHeaderLinesMatch(expected_header_lines, actual_divider_lines)
+        # with self.subTest('entries', section='entries'):
+        expected_entry_lines = expected_lines[actual_divider_index + 1:]
+        actual_entry_lines = actual_lines[actual_divider_index + 1:]
+        self.assertEntriesLinesMatch(expected_entry_lines, actual_entry_lines)
 
-    def _test_can_process_logfile(self, logfile):
-        output_file = os.path.join(self.test_dir, 'log_output.txt')
-        with open(os.devnull, 'w') as devnull:
-            with contextlib.redirect_stdout(devnull):
-                zero_log_parser.parse_log(logfile, output_file)
-        last_output_file = zero_log_parser.default_parsed_output_for(logfile)
-        self.assertFileContentsMatch(last_output_file, output_file)
+
+def test_log_parse_output_against(log_file):
+    test_name = 'test_log({})'.format(log_file)
+    test = logfile_test_generator(log_file)
+    setattr(TestLogParser, test_name, test)
 
 
 def main():
@@ -68,18 +119,14 @@ def main():
     log_file_or_dir = args.log_file_or_dir
     if os.path.isdir(log_file_or_dir):
         log_dir = log_file_or_dir
-        log_files_to_test = [log_file for log_file in
-                             os.listdir(log_dir) if zero_log_parser.is_log_file_path(log_file)]
-        for log_file in log_files_to_test:
-            test_name = 'test_%s' % log_file
-            logfile_path = os.path.join(log_dir, log_file)
-            test = logfile_test_generator(logfile_path)
-            setattr(TestLogParser, test_name, test)
+        for dir_path, _, filenames in os.walk(log_dir):
+            for filename in filenames:
+                if parser.is_log_file_path(filename):
+                    log_file = os.path.join(dir_path, filename)
+                    test_log_parse_output_against(log_file)
     else:
         log_file = log_file_or_dir
-        test_name = 'test_%s' % log_file
-        test = logfile_test_generator(log_file)
-        setattr(TestLogParser, test_name, test)
+        test_log_parse_output_against(log_file)
 
     # Ensure unittest doesn't interpret log_dir
     sys.argv[1:] = args.unittest_args
