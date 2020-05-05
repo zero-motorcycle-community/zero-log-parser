@@ -743,20 +743,24 @@ class LogData:
         self.log_version, self.header_info = self.get_version_and_header(log_file)
         self.entries_count, self.entries = self.get_entries_and_counts(log_file)
 
+    log_type_mbb = 'MBB'
+    log_type_bms = 'BMS'
+    log_type_unknown = 'Unknown Type'
+
     @classmethod
     def get_log_type(cls, log: LogFile):
         if log.is_printable(0x000, count=3):
             log_type = log.unpack_str(0x000, count=3)
         else:
             log_type = log.unpack_str(0x00d, count=3)
-        if log_type not in ['MBB', 'BMS']:
-            log_type = 'Unknown Type'
+        if log_type not in [cls.log_type_mbb, cls.log_type_bms]:
+            log_type = cls.log_type_unknown
         return log_type
 
     def get_version_and_header(self, log: LogFile):
         sys_info = OrderedDict()
         log_version = REV0
-        if self.log_type == 'MBB':
+        if self.log_type == self.log_type_mbb or self.log_type == self.log_type_unknown:
             # Check for log formats:
             vin_v0 = log.unpack_str(0x240, count=17)  # v0 (Gen2)
             vin_v1 = log.unpack_str(0x252, count=17)  # v1 (Gen2 2019+)
@@ -790,7 +794,8 @@ class LogData:
                 print("VIN unreadable", sys_info['VIN'])
             sys_info['Model'] = log.unpack_str(model_offset, count=3)
             sys_info['Initial date'] = log.unpack_str(0x2a, count=20)
-        elif self.log_type == 'BMS':
+        if len(sys_info) == 0 and (self.log_type == self.log_type_bms
+                                   or self.log_type == self.log_type_unknown):
             # Check for two log formats:
             log_version_code = log.unpack('uint8', 0x4)
             if log_version_code == 0xb6:
@@ -819,13 +824,13 @@ class LogData:
         raw_log = log.raw()
         if self.log_version < REV2:
             # handle missing header index
-            try:
-                entries_header_idx = log.index_of_sequence(b'\xa2\xa2\xa2\xa2')
+            entries_header_idx = log.index_of_sequence(b'\xa2\xa2\xa2\xa2')
+            if entries_header_idx is not None:
                 entries_end = log.unpack('uint32', 0x4, offset=entries_header_idx)
                 entries_start = log.unpack('uint32', 0x8, offset=entries_header_idx)
                 claimed_entries_count = log.unpack('uint32', 0xc, offset=entries_header_idx)
                 entries_data_begin = entries_header_idx + 0x10
-            except ValueError:
+            else:
                 entries_end = len(raw_log)
                 entries_start = log.index_of_sequence(b'\xb2')
                 entries_data_begin = entries_start
