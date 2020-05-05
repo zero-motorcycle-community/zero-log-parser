@@ -20,7 +20,7 @@ import codecs
 from time import localtime, strftime, gmtime
 from collections import OrderedDict
 from math import trunc
-from typing import Union
+from typing import Dict, Optional, Union
 
 TIME_FORMAT = '%m/%d/%Y %H:%M:%S'
 USE_MBB_TIME = True
@@ -723,180 +723,192 @@ def is_vin(vin: str):
             and vin.startswith('538'))
 
 
-def parse_log(bin_file, output_file: str):
+class LogData:
+    log_type: str
+    log_version: int
+    header_info: Dict[str, str]
+    entries_count: Optional[int]
+    entries: [str]
+
+    def __init__(self, log_file: LogFile):
+        self.log_type = self.get_log_type(log_file)
+        self.log_version, self.header_info = self.get_version_and_header(log_file)
+        self.entries_count, self.entries = self.get_entries_and_counts(log_file)
+
+    @classmethod
+    def get_log_type(cls, log: LogFile):
+        if log.is_printable(0x000, count=3):
+            log_type = log.unpack_str(0x000, count=3)
+        else:
+            log_type = log.unpack_str(0x00d, count=3)
+        if log_type not in ['MBB', 'BMS']:
+            log_type = 'Unknown Type'
+        return log_type
+
+    def get_version_and_header(self, log: LogFile):
+        sys_info = OrderedDict()
+        log_version = REV0
+        if self.log_type == 'MBB':
+            # Check for log formats:
+            vin_v0 = log.unpack_str(0x240, count=17)  # v0 (Gen2)
+            vin_v1 = log.unpack_str(0x252, count=17)  # v1 (Gen2 2019+)
+            vin_v2 = log.unpack_str(0x029, count=17)  # v2 (Gen3)
+            if is_vin(vin_v0):
+                log_version = REV0
+                sys_info['Serial number'] = log.unpack_str(0x200, count=21)
+                sys_info['VIN'] = vin_v0
+                sys_info['Firmware rev.'] = log.unpack('uint16', 0x27b)
+                sys_info['Board rev.'] = log.unpack('uint16', 0x27d)
+                model_offset = 0x27f
+            elif is_vin(vin_v1):
+                log_version = REV1
+                sys_info['Serial number'] = log.unpack_str(0x210, count=13)
+                sys_info['VIN'] = vin_v1
+                sys_info['Firmware rev.'] = log.unpack('uint16', 0x266)
+                sys_info['Board rev.'] = log.unpack('uint16', 0x268)  # TODO confirm Board rev.
+                model_offset = 0x26B
+            elif is_vin(vin_v2):
+                log_version = REV2
+                sys_info['Serial number'] = log.unpack_str(0x03C, count=13)
+                sys_info['VIN'] = vin_v2
+                sys_info['Firmware rev.'] = log.unpack_str(0x06b, count=7)
+                sys_info['Board rev.'] = log.unpack_str(0x05C, count=8)
+                model_offset = 0x019
+            else:
+                print("Unknown Log Format")
+                sys_info['VIN'] = vin_v0
+                model_offset = 0x27f
+            if 'VIN' not in sys_info or not BinaryTools.is_printable(sys_info['VIN']):
+                print("VIN unreadable", sys_info['VIN'])
+            sys_info['Model'] = log.unpack_str(model_offset, count=3)
+            # sys_info['Initial date'] = log.unpack_str(0x2a, count=20)
+        elif self.log_type == 'BMS':
+            # Check for two log formats:
+            log_version_code = log.unpack('uint8', 0x4)
+            if log_version_code == 0xb6:
+                log_version = REV0
+            elif log_version_code == 0xde:
+                log_version = REV1
+            else:
+                print("Unknown Log Format", log_version_code)
+            sys_info['Initial date'] = log.unpack_str(0x12, count=20)
+            if log_version == REV0:
+                sys_info['BMS serial number'] = log.unpack_str(0x300, count=21)
+                sys_info['Pack serial number'] = log.unpack_str(0x320, count=8)
+            elif log_version == REV1:
+                # TODO identify BMS serial number
+                sys_info['Pack serial number'] = log.unpack_str(0x331, count=8)
+        elif self.log_type == 'Unknown Type':
+            sys_info['System info'] = 'unknown'
+        return log_version, sys_info
+
+    def get_entries_and_counts(self, log: LogFile):
+        raw_log = log.raw()
+        if self.log_version < REV2:
+            # handle missing header index
+            try:
+                entries_header_idx = log.index_of_sequence(b'\xa2\xa2\xa2\xa2')
+                entries_end = log.unpack('uint32', 0x4, offset=entries_header_idx)
+                entries_start = log.unpack('uint32', 0x8, offset=entries_header_idx)
+                claimed_entries_count = log.unpack('uint32', 0xc, offset=entries_header_idx)
+                entries_data_begin = entries_header_idx + 0x10
+            except ValueError:
+                entries_end = len(raw_log)
+                entries_start = log.index_of_sequence(b'\xb2')
+                entries_data_begin = entries_start
+                claimed_entries_count = 0
+
+            # Handle data wrapping across the upper bound of the ring buffer
+            if entries_start >= entries_end:
+                event_log = raw_log[entries_start:] + \
+                            raw_log[entries_data_begin:entries_end]
+            else:
+                event_log = raw_log[entries_start:entries_end]
+
+            # count entry headers
+            entries_count = event_log.count(b'\xb2')
+
+            print('{} entries found ({} claimed)'.format(entries_count, claimed_entries_count))
+        elif self.log_version == REV2:
+            entries_start = 0x0
+            entries_data_begin = 0x0
+            entries_end = len(raw_log)
+            entries_count = 0
+            # Handle data wrapping across the upper bound of the ring buffer
+            if entries_start >= entries_end:
+                event_log = raw_log[entries_start:] + \
+                            raw_log[entries_data_begin:entries_end]
+            else:
+                event_log = raw_log[entries_start:entries_end]
+        return entries_count, event_log
+
+    header_divider = \
+        '+--------+----------------------+--------------------------+----------------------------------\n'
+
+    def emit_zero_compatible_decoding(self, output_file):
+        with codecs.open(output_file, 'wb', 'utf-8-sig') as f:
+            f.write('Zero ' + self.log_type + ' log\n')
+            f.write('\n')
+
+            for k, v in self.header_info.items():
+                f.write('{0:18} {1}\n'.format(k, v))
+            f.write('\n')
+
+            f.write('Printing {0} of {0} log entries..\n'.format(self.entries_count))
+            f.write('\n')
+            f.write(' Entry    Time of Log            Event                      Conditions\n')
+            f.write(self.header_divider)
+
+            read_pos = 0
+            unhandled = 0
+            unknown_entries = 0
+            unknown = []
+            for entry_num in range(self.entries_count):
+                (length, entry, unhandled) = parse_entry(self.entries, read_pos, unhandled)
+
+                entry['line'] = entry_num + 1
+
+                conditions = entry.get('conditions')
+                if conditions:
+                    if '???' in conditions:
+                        u = conditions[0]
+                        unknown_entries += 1
+                        if u not in unknown:
+                            unknown.append(u)
+                        conditions = '???'
+                        f.write(
+                            ' {line:05d}     {time:>19s}   {event} {conditions}\n'.format(
+                                **entry))
+                    else:
+                        f.write(
+                            ' {line:05d}     {time:>19s}   {event:25}  {conditions}\n'.format(
+                                **entry))
+                else:
+                    f.write(' {line:05d}     {time:>19s}   {event}\n'.format(**entry))
+
+                read_pos += length
+
+            f.write('\n')
+        if unhandled > 0:
+            print('{} exceptions in parser'.format(unhandled))
+        if unknown:
+            print('{} unknown entries of types {}'.format(unknown_entries,
+                                                          ', '.join(
+                                                              hex(ord(x)) for x in unknown),
+                                                          '02x'))
+        print('Saved to {}'.format(output_file))
+
+
+def parse_log(bin_file: str, output_file: str):
     """
     Parse a Zero binary log file into a human readable text file
     """
     print('Parsing {}'.format(bin_file))
 
     log = LogFile(bin_file)
-    log_type = get_log_type(log)
+    log_data = LogData(log)
 
-    log_version, sys_info = get_version_and_header(log, log_type)
-
-    entries_count, event_log = get_entries_and_counts(log, log_version)
-
-    emit_decoded_log_file(output_file, log_type, sys_info, entries_count, event_log)
-
-
-def get_version_and_header(log, log_type):
-    sys_info = OrderedDict()
-    log_version = REV0
-    if log_type == 'MBB':
-        # Check for log formats:
-        vin_v0 = log.unpack_str(0x240, count=17)  # v0 (Gen2)
-        vin_v1 = log.unpack_str(0x252, count=17)  # v1 (Gen2 2019+)
-        vin_v2 = log.unpack_str(0x029, count=17)  # v2 (Gen3)
-        if is_vin(vin_v0):
-            log_version = REV0
-            sys_info['Serial number'] = log.unpack_str(0x200, count=21)
-            sys_info['VIN'] = vin_v0
-            sys_info['Firmware rev.'] = log.unpack('uint16', 0x27b)
-            sys_info['Board rev.'] = log.unpack('uint16', 0x27d)
-            model_offset = 0x27f
-        elif is_vin(vin_v1):
-            log_version = REV1
-            sys_info['Serial number'] = log.unpack_str(0x210, count=13)
-            sys_info['VIN'] = vin_v1
-            sys_info['Firmware rev.'] = log.unpack('uint16', 0x266)
-            sys_info['Board rev.'] = log.unpack('uint16', 0x268)  # TODO confirm Board rev.
-            model_offset = 0x26B
-        elif is_vin(vin_v2):
-            log_version = REV2
-            sys_info['Serial number'] = log.unpack_str(0x03C, count=13)
-            sys_info['VIN'] = vin_v2
-            sys_info['Firmware rev.'] = log.unpack_str(0x06b, count=7)
-            sys_info['Board rev.'] = log.unpack_str(0x05C, count=8)
-            model_offset = 0x019
-        else:
-            print("Unknown Log Format")
-            sys_info['VIN'] = vin_v0
-            model_offset = 0x27f
-        if 'VIN' not in sys_info or not BinaryTools.is_printable(sys_info['VIN']):
-            print("VIN unreadable", sys_info['VIN'])
-        sys_info['Model'] = log.unpack_str(model_offset, count=3)
-        # sys_info['Initial date'] = log.unpack_str(0x2a, count=20)
-    elif log_type == 'BMS':
-        # Check for two log formats:
-        log_version_code = log.unpack('uint8', 0x4)
-        if log_version_code == 0xb6:
-            log_version = REV0
-        elif log_version_code == 0xde:
-            log_version = REV1
-        else:
-            print("Unknown Log Format", log_version_code)
-        sys_info['Initial date'] = log.unpack_str(0x12, count=20)
-        if log_version == REV0:
-            sys_info['BMS serial number'] = log.unpack_str(0x300, count=21)
-            sys_info['Pack serial number'] = log.unpack_str(0x320, count=8)
-        elif log_version == REV1:
-            # TODO identify BMS serial number
-            sys_info['Pack serial number'] = log.unpack_str(0x331, count=8)
-    elif log_type == 'Unknown Type':
-        sys_info['System info'] = 'unknown'
-    return log_version, sys_info
-
-
-def get_entries_and_counts(log, log_version):
-    raw_log = log.raw()
-    if log_version < REV2:
-        # handle missing header index
-        try:
-            entries_header_idx = log.index_of_sequence(b'\xa2\xa2\xa2\xa2')
-            entries_end = log.unpack('uint32', 0x4, offset=entries_header_idx)
-            entries_start = log.unpack('uint32', 0x8, offset=entries_header_idx)
-            claimed_entries_count = log.unpack('uint32', 0xc, offset=entries_header_idx)
-            entries_data_begin = entries_header_idx + 0x10
-        except ValueError:
-            entries_end = len(raw_log)
-            entries_start = log.index_of_sequence(b'\xb2')
-            entries_data_begin = entries_start
-            claimed_entries_count = 0
-
-        # Handle data wrapping across the upper bound of the ring buffer
-        if entries_start >= entries_end:
-            event_log = raw_log[entries_start:] + \
-                        raw_log[entries_data_begin:entries_end]
-        else:
-            event_log = raw_log[entries_start:entries_end]
-
-        # count entry headers
-        entries_count = event_log.count(b'\xb2')
-
-        print('{} entries found ({} claimed)'.format(entries_count, claimed_entries_count))
-    elif log_version == REV2:
-        entries_start = 0x0
-        entries_data_begin = 0x0
-        entries_end = len(raw_log)
-        # Handle data wrapping across the upper bound of the ring buffer
-        if entries_start >= entries_end:
-            event_log = raw_log[entries_start:] + \
-                        raw_log[entries_data_begin:entries_end]
-        else:
-            event_log = raw_log[entries_start:entries_end]
-    return entries_count, event_log
-
-
-def get_log_type(log: LogFile):
-    if log.is_printable(0x000, count=3):
-        log_type = log.unpack_str(0x000, count=3)
-    else:
-        log_type = log.unpack_str(0x00d, count=3)
-    if log_type not in ['MBB', 'BMS']:
-        log_type = 'Unknown Type'
-    return log_type
-
-
-def emit_decoded_log_file(output_file, log_type, sys_info, entries_count, event_log):
-    with codecs.open(output_file, 'wb', 'utf-8-sig') as f:
-        f.write('Zero ' + log_type + ' log\n')
-        f.write('\n')
-
-        for k, v in sys_info.items():
-            f.write('{0:18} {1}\n'.format(k, v))
-        f.write('\n')
-
-        f.write('Printing {0} of {0} log entries..\n'.format(entries_count))
-        f.write('\n')
-        f.write(' Entry    Time of Log            Event                      Conditions\n')
-        f.write(
-            '+--------+----------------------+--------------------------+----------------------------------\n')
-
-        read_pos = 0
-        unhandled = 0
-        unknown_entries = 0
-        unknown = []
-        for entry_num in range(entries_count):
-            (length, entry, unhandled) = parse_entry(event_log, read_pos, unhandled)
-
-            entry['line'] = entry_num + 1
-
-            conditions = entry.get('conditions')
-            if conditions:
-                if '???' in conditions:
-                    u = conditions[0]
-                    unknown_entries += 1
-                    if u not in unknown:
-                        unknown.append(u)
-                    conditions = '???'
-                    f.write(
-                        ' {line:05d}     {time:>19s}   {event} {conditions}\n'.format(**entry))
-                else:
-                    f.write(
-                        ' {line:05d}     {time:>19s}   {event:25}  {conditions}\n'.format(**entry))
-            else:
-                f.write(' {line:05d}     {time:>19s}   {event}\n'.format(**entry))
-
-            read_pos += length
-
-        f.write('\n')
-    if unhandled > 0:
-        print('{} exceptions in parser'.format(unhandled))
-    if unknown:
-        print('{} unknown entries of types {}'.format(unknown_entries,
-                                                      ', '.join(hex(ord(x)) for x in unknown),
-                                                      '02x'))
-    print('Saved to {}'.format(output_file))
+    log_data.emit_zero_compatible_decoding(output_file)
 
 
 def default_parsed_output_for(bin_file_path: str):
