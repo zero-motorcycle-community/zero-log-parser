@@ -13,13 +13,13 @@ Usage:
 
 """
 
-import os
-import struct
-import string
 import codecs
-from time import localtime, strftime, gmtime
+import os
+import string
+import struct
 from collections import OrderedDict
 from math import trunc
+from time import gmtime, localtime, strftime
 from typing import Dict, Optional, Union
 
 TIME_FORMAT = '%m/%d/%Y %H:%M:%S'
@@ -307,7 +307,6 @@ def parse_entry(log_data, address, unhandled):
         }
 
     def bms_reflash(x):
-
         return dict(event='BMS Reflash', conditions='Revision {rev}, ' 'Built {build}'.format(
             rev=BinaryTools.unpack('uint8', x, 0x00),
             build=BinaryTools.unpack_str(x, 0x01, 20)))
@@ -321,20 +320,17 @@ def parse_entry(log_data, address, unhandled):
         }
 
     def bms_contactor_state(x):
-        if BinaryTools.unpack('uint32', x, 0x01):
-            prechg = trunc((BinaryTools.unpack('uint32', x, 0x05) * 1.0) / (
-                    BinaryTools.unpack('uint32', x, 0x01) * 1.0) * 100)
-        else:
-            prechg = 0x0
+        pack_voltage = BinaryTools.unpack('uint32', x, 0x01)
+        switched_voltage = BinaryTools.unpack('uint32', x, 0x05)
         return {
             'event': '{state}'.format(
                 state='Contactor was ' +
                       ('Closed' if BinaryTools.unpack('bool', x, 0x0) else 'Opened')),
             'conditions':
                 'Pack V: {pv}mV, Switched V: {sv}mV, Prechg Pct: {pc:2.0f}%, Dischg Cur: {dc}mA'.format(
-                    pv=BinaryTools.unpack('uint32', x, 0x01),
-                    sv=BinaryTools.unpack('uint32', x, 0x05),
-                    pc=prechg,
+                    pv=pack_voltage,
+                    sv=switched_voltage,
+                    pc=trunc(convert_ratio_to_percent(switched_voltage, pack_voltage)),
                     dc=BinaryTools.unpack('int32', x, 0x09))
         }
 
