@@ -117,7 +117,12 @@ class LogFile:
     """
 
     def __init__(self, file_path: str):
-        with open(file_path, 'rb') as f:
+        self.file_path = file_path
+        self._data = bytearray()
+        self.reload()
+
+    def reload(self):
+        with open(self.file_path, 'rb') as f:
             self._data = bytearray(f.read())
 
     def index_of_sequence(self, sequence, start=None):
@@ -749,10 +754,15 @@ class LogData:
 
     @classmethod
     def get_log_type(cls, log: LogFile):
+        log_type = None
         if log.is_printable(0x000, count=3):
             log_type = log.unpack_str(0x000, count=3)
-        else:
+        elif log.is_printable(0x00d, count=3):
             log_type = log.unpack_str(0x00d, count=3)
+        elif cls.log_type_mbb in log.file_path.upper():
+            log_type = cls.log_type_mbb
+        elif cls.log_type_bms in log.file_path.upper():
+            log_type = cls.log_type_bms
         if log_type not in [cls.log_type_mbb, cls.log_type_bms]:
             log_type = cls.log_type_unknown
         return log_type
