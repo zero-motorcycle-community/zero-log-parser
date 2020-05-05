@@ -37,6 +37,8 @@ class TestLogParser(unittest.TestCase):
         return line_no
 
     def assertHeaderLinesMatch(self, expected_header_lines: [str], actual_header_lines: [str]):
+        self.assertNotEqual(actual_header_lines[0], 'Zero Unknown Type log',
+                            msg='Log type unknown')
         self.assertLessEqual(len(expected_header_lines), len(actual_header_lines),
                              msg='No fewer header lines than before')
         expected_headers = {line for line in expected_header_lines
