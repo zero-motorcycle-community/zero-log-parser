@@ -781,7 +781,7 @@ class LogData:
             if 'VIN' not in sys_info or not BinaryTools.is_printable(sys_info['VIN']):
                 print("VIN unreadable", sys_info['VIN'])
             sys_info['Model'] = log.unpack_str(model_offset, count=3)
-            # sys_info['Initial date'] = log.unpack_str(0x2a, count=20)
+            sys_info['Initial date'] = log.unpack_str(0x2a, count=20)
         elif self.log_type == 'BMS':
             # Check for two log formats:
             log_version_code = log.unpack('uint8', 0x4)
