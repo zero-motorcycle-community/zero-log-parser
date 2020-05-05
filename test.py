@@ -56,8 +56,11 @@ class TestLogParser(unittest.TestCase):
         actual_dict = {}
         for line in actual_header_lines:
             if '   ' in line:
-                key, value = re.split(r'[ ]{3,}', line.strip(), 2)
-                actual_dict[key] = value
+                try:
+                    key, value = re.split(r'[ ]{3,}', line.strip(), 2)
+                    actual_dict[key] = value
+                except ValueError:
+                    pass
         self.assertDictEqual(expected_dict, actual_dict,
                              msg='header metadata matches')
 
