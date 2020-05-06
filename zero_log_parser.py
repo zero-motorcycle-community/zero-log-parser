@@ -95,19 +95,30 @@ class BinaryTools:
         return data
 
     @staticmethod
-    def decode_str(log_text_segment: bytearray) -> str:
+    def decode_str(log_text_segment: bytearray, encoding='utf-8') -> str:
         """Decodes UTF-8 strings from a test segment, ignoring any errors"""
-        return log_text_segment.decode('utf-8', 'ignore')
+        return log_text_segment.decode(encoding=encoding, errors='ignore')
 
     @classmethod
-    def unpack_str(cls, log_text_segment: bytearray, address, count=1, offset=0) -> str:
+    def unpack_str(cls, log_text_segment: bytearray, address, count=1, offset=0, encoding='utf-8') -> str:
         """Unpacks and decodes UTF-8 strings from a test segment, ignoring any errors"""
         unpacked = cls.unpack('char', log_text_segment, address, count, offset)
-        return cls.decode_str(unpacked.partition(b'\0')[0])
+        return cls.decode_str(unpacked.partition(b'\0')[0], encoding=encoding)
 
     @staticmethod
     def is_printable(bytes_or_str: str) -> bool:
         return all(c in string.printable for c in bytes_or_str)
+
+
+vin_length = 17
+vin_guaranteed_prefix = '538'
+
+
+def is_vin(vin: str):
+    """Whether the string matches a Zero VIN."""
+    return (BinaryTools.is_printable(vin)
+            and len(vin) == vin_length
+            and vin.startswith(vin_guaranteed_prefix))
 
 
 # noinspection PyMissingOrEmptyDocstring
@@ -120,6 +131,7 @@ class LogFile:
         self.file_path = file_path
         self._data = bytearray()
         self.reload()
+        self.log_type = self.get_log_type()
 
     def reload(self):
         with open(self.file_path, 'rb') as f:
@@ -143,14 +155,14 @@ class LogFile:
         return BinaryTools.unpack(type_name, self._data, address + offset,
                                   count=count)
 
-    def decode_str(self, address, count=1, offset=0):
+    def decode_str(self, address, count=1, offset=0, encoding='utf-8'):
         return BinaryTools.decode_str(BinaryTools.unpack('char', self._data, address + offset,
-                                                         count=count))
+                                                         count=count), encoding=encoding)
 
-    def unpack_str(self, address, count=1, offset=0) -> str:
+    def unpack_str(self, address, count=1, offset=0, encoding='utf-8') -> str:
         """Unpacks and decodes UTF-8 strings from a test segment, ignoring any errors"""
         unpacked = self.unpack('char', address, count, offset)
-        return BinaryTools.decode_str(unpacked.partition(b'\0')[0])
+        return BinaryTools.decode_str(unpacked.partition(b'\0')[0], encoding=encoding)
 
     def is_printable(self, address, count=1, offset=0) -> bool:
         unpacked = self.unpack('char', address, count, offset).decode('utf-8', 'ignore')
@@ -180,6 +192,21 @@ class LogFile:
         if log_type not in [self.log_type_mbb, self.log_type_bms]:
             log_type = self.log_type_unknown
         return log_type
+
+    def is_mbb(self):
+        return self.log_type == self.log_type_mbb
+
+    def is_bms(self):
+        return self.log_type == self.log_type_bms
+
+    def is_unknown(self):
+        return self.log_type == self.log_type_unknown
+
+    def get_filename_vin(self):
+        basename = os.path.basename(self.file_path)
+        if basename and len(basename) > vin_length and vin_guaranteed_prefix in basename:
+            vin_index = basename.index(vin_guaranteed_prefix)
+            return basename[vin_index:vin_index + vin_length]
 
 
 def convert_mv_to_v(milli_volts: int) -> float:
@@ -747,15 +774,7 @@ REV1 = 1
 REV2 = 2
 
 
-def is_vin(vin: str):
-    """Whether the string matches a Zero VIN."""
-    return (BinaryTools.is_printable(vin)
-            and len(vin) == 17
-            and vin.startswith('538'))
-
-
 class LogData:
-    log_type: str
     log_version: int
     header_info: Dict[str, str]
     entries_count: Optional[int]
@@ -763,19 +782,17 @@ class LogData:
 
     def __init__(self, log_file: LogFile):
         self.log_file = log_file
-        self.log_type = log_file.get_log_type()
         self.log_version, self.header_info = self.get_version_and_header(log_file)
         self.entries_count, self.entries = self.get_entries_and_counts(log_file)
 
     def get_version_and_header(self, log: LogFile):
         sys_info = OrderedDict()
         log_version = REV0
-        if len(sys_info) == 0 and (self.log_type == self.log_file.log_type_mbb
-                                   or self.log_type == self.log_file.log_type_unknown):
+        if len(sys_info) == 0 and (self.log_file.is_mbb() or self.log_file.is_unknown()):
             # Check for log formats:
             vin_v0 = log.unpack_str(0x240, count=17)  # v0 (Gen2)
             vin_v1 = log.unpack_str(0x252, count=17)  # v1 (Gen2 2019+)
-            vin_v2 = log.unpack_str(0x029, count=17)  # v2 (Gen3)
+            vin_v2 = log.unpack_str(0x029, count=17, encoding='latin_1')  # v2 (Gen3)
             if is_vin(vin_v0):
                 log_version = REV0
                 sys_info['Serial number'] = log.unpack_str(0x200, count=21)
@@ -801,12 +818,14 @@ class LogData:
                 print("Unknown Log Format")
                 sys_info['VIN'] = vin_v0
                 model_offset = 0x27f
+            filename_vin = self.log_file.get_filename_vin()
             if 'VIN' not in sys_info or not BinaryTools.is_printable(sys_info['VIN']):
                 print("VIN unreadable", sys_info['VIN'])
+            elif sys_info['VIN'] != filename_vin:
+                raise ValueError()
             sys_info['Model'] = log.unpack_str(model_offset, count=3)
             sys_info['Initial date'] = log.unpack_str(0x2a, count=20)
-        if len(sys_info) == 0 and (self.log_type == self.log_file.log_type_bms
-                                   or self.log_type == self.log_file.log_type_unknown):
+        if len(sys_info) == 0 and (self.log_file.is_bms() or self.log_file.is_unknown()):
             # Check for two log formats:
             log_version_code = log.unpack('uint8', 0x4)
             if log_version_code == 0xb6:
@@ -827,7 +846,7 @@ class LogData:
             elif log_version == REV2:
                 sys_info['BMS serial number'] = log.unpack_str(0x038, count=13)
                 sys_info['Pack serial number'] = log.unpack_str(0x06c, count=7)
-        elif self.log_type == 'Unknown Type':
+        elif self.log_file.is_unknown():
             sys_info['System info'] = 'unknown'
         return log_version, sys_info
 
@@ -909,7 +928,7 @@ class LogData:
 
     def emit_zero_compatible_decoding(self, output_file):
         with codecs.open(output_file, 'wb', 'utf-8-sig') as f:
-            f.write('Zero ' + self.log_type + ' log\n')
+            f.write('Zero ' + self.log_file.log_type + ' log\n')
             f.write('\n')
 
             for k, v in self.header_info.items():
