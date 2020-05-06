@@ -772,6 +772,100 @@ def parse_entry(log_data, address, unhandled, logger=None):
     return length, entry, unhandled
 
 
+def parse_gen3_entry(entry_payload: bytearray):
+    payload_string = BinaryTools.unpack_str(entry_payload, 0, len(entry_payload))
+    event_message = payload_string
+    event_conditions = ''
+    conditions = {}
+    conditions_str = ''
+    if '. ' in payload_string:
+        sentences = payload_string.split(sep='. ')
+        event_conditions = sentences[-1]
+        event_message = '. '.join(sentences[:-1]) if len(sentences) > 2 else sentences[0]
+    elif payload_string.startswith('I_('):
+        match = re.match(r'(I_)\((.*)\)(.*)', payload_string)
+        if match:
+            event_message = 'Current'
+            key_prefix = match.group(1)
+            event_conditions = match.group(2)
+            value_suffix = match.group(3)
+            kv_parts = event_conditions.split(', ')
+            for list_part in kv_parts:
+                if ': ' in list_part:
+                    [k, v] = list_part.split(': ', maxsplit=1)
+                    conditions[key_prefix + k] = v + value_suffix
+            event_conditions = ''
+    elif ': ' in payload_string:
+        [event_message, event_conditions] = payload_string.split(': ', maxsplit=1)
+    elif ' = ' in payload_string:
+        [event_message, event_conditions] = payload_string.split(' = ', maxsplit=1)
+    elif ' from ' in payload_string and ' to ' in payload_string:
+        [event_message, event_conditions] = payload_string.split(' from ', maxsplit=1)
+        match = re.match(r'(.*) to (.*)', event_conditions)
+        if match:
+            conditions = {
+                'from': match.group(1),
+                'to': match.group(2)
+            }
+            event_conditions = ''
+    else:
+        match = re.match(r'([^()]+) \(([^()]+)\)', payload_string)
+        if match:
+            event_message = match.group(1)
+            event_conditions = match.group(2)
+    if event_conditions.startswith('V_('):
+        match = re.match(r'(V_)\((.*)\)(.*)', event_conditions)
+        if match:
+            key_prefix = match.group(1)
+            event_conditions = match.group(2)
+            value_suffix = match.group(3).rstrip(',')
+            kv_parts = event_conditions.split(', ')
+            for list_part in kv_parts:
+                if ': ' in list_part:
+                    [k, v] = list_part.split(': ', maxsplit=1)
+                    conditions[key_prefix + k] = v + value_suffix
+    elif 'Old: ' in event_conditions and 'New: ' in event_conditions:
+        matches = re.search('Old: (0x[0-9a-fA-F]+) New: (0x[0-9a-fA-F]+)', event_conditions)
+        if matches:
+            old = matches.group(1)
+            old_int = int(old, 16)
+            old_bits = '{0:b}'.format(old_int)
+            new = matches.group(2)
+            new_int = int(new, 16)
+            new_bits = '{0:b}'.format(new_int)
+            if len(new_bits) != len(old_bits):
+                max_len = max(len(new_bits), len(old_bits))
+                bitwise_format = '{0:0' + str(max_len) + 'b}'
+                new_bits = bitwise_format.format(new_int)
+                old_bits = bitwise_format.format(old_int)
+            conditions['old'] = old_bits
+            conditions['new'] = new_bits
+    elif ', ' in event_conditions:
+        list_parts = [x.strip() for x in event_conditions.split(', ')]
+        for list_part in list_parts:
+            if ': ' in list_part:
+                [k, v] = list_part.split(': ', maxsplit=1)
+            else:
+                list_part_words = list_part.split(' ')
+                if len(list_part_words) == 2:
+                    [k, v] = list_part_words
+                else:
+                    k = list_part
+                    v = ''
+            conditions[k] = v
+    if len(conditions) > 0:
+        for k, v in conditions.items():
+            if conditions_str:
+                conditions_str += ', '
+            conditions_str += (k + ': ' + v) if k and v else k or v
+    elif event_conditions:
+        conditions_str = event_conditions
+    return {
+        'message': event_message,
+        'conditions': conditions_str
+    }
+
+
 REV0 = 0
 REV1 = 1
 REV2 = 2
@@ -947,7 +1041,10 @@ class LogData:
     header_divider = \
         '+--------+----------------------+--------------------------+----------------------------------\n'
 
-    def emit_zero_compatible_decoding(self, output_file):
+    def has_official_output_reference(self):
+        return self.log_version < REV2
+
+    def emit_zero_compatible_decoding(self, output_file: str):
         with codecs.open(output_file, 'wb', 'utf-8-sig') as f:
             f.write('Zero ' + self.log_file.log_type + ' log\n')
             f.write('\n')
@@ -992,11 +1089,20 @@ class LogData:
                     read_pos += length
             else:
                 for line, entry in enumerate(self.entries):
-                    event_message = BinaryTools.unpack_str(entry, 0, len(entry))
-                    f.write(' {line:05d}     {time:>19s}   {event}\n'.format(
-                        line=line,
-                        time='',
-                        event=event_message))
+                    entry = parse_gen3_entry(entry)
+                    conditions = entry.get('conditions')
+                    if conditions:
+                        f.write(
+                            ' {line:05d}     {time:>19s}   {event:25}  ({conditions})\n'.format(
+                                line=line,
+                                time='',
+                                event=entry['message'],
+                                conditions=entry['conditions']))
+                    else:
+                        f.write(' {line:05d}     {time:>19s}   {event}\n'.format(
+                            line=line,
+                            time='',
+                            event=entry['message']))
             f.write('\n')
         if unhandled > 0:
             if self.logger:
@@ -1022,7 +1128,10 @@ def parse_log(bin_file: str, output_file: str, logger: Optional[logging.Logger] 
     log = LogFile(bin_file, logger=logger)
     log_data = LogData(log, logger=logger)
 
-    log_data.emit_zero_compatible_decoding(output_file)
+    if log_data.has_official_output_reference():
+        log_data.emit_zero_compatible_decoding(output_file)
+    else:
+        log_data.emit_zero_compatible_decoding(output_file)
 
 
 def default_parsed_output_for(bin_file_path: str):
