@@ -395,7 +395,7 @@ def parse_entry(log_data, address, unhandled, logger=None):
                 'Pack V: {pv}mV, Switched V: {sv}mV, Prechg Pct: {pc:2.0f}%, Dischg Cur: {dc}mA'.format(
                     pv=pack_voltage,
                     sv=switched_voltage,
-                    pc=trunc(convert_ratio_to_percent(switched_voltage, pack_voltage)),
+                    pc=convert_ratio_to_percent(switched_voltage, pack_voltage),
                     dc=BinaryTools.unpack('int32', x, 0x09))
         }
 
@@ -586,7 +586,7 @@ def parse_entry(log_data, address, unhandled, logger=None):
                 batcurr=battery_current
             )
         elif event_name == closing_contactor:
-            conditions_msg = 'vmod: {modvolt:7.3f}V, maxsys: {sysmax:7.3f}V, minsys: {sysmin:7.3f}V, diff: {diff:0.03f}V, vcap: {vcap:6.3f}V, prechg: {prechg}%'.format(
+            conditions_msg = 'vmod: {modvolt:7.3f}V, maxsys: {sysmax:7.3f}V, minsys: {sysmin:7.3f}V, diff: {diff:0.03f}V, vcap: {vcap:6.3f}V, prechg: {prechg:2.0f}%'.format(
                 modvolt=mod_volt,
                 sysmax=sys_max,
                 sysmin=sys_min,
@@ -594,7 +594,7 @@ def parse_entry(log_data, address, unhandled, logger=None):
                 batcurr=battery_current,
                 serial=printable_serial_no,
                 diff=sys_max - sys_min,
-                prechg=int(convert_ratio_to_percent(capacitor_volt, mod_volt)))
+                prechg=convert_ratio_to_percent(capacitor_volt, mod_volt))
         elif event_name == registered:
             conditions_msg = 'serial: {serial},  vmod: {modvolt:3.3f}V'.format(
                 serial=printable_serial_no,
@@ -640,17 +640,16 @@ def parse_entry(log_data, address, unhandled, logger=None):
     def battery_discharge_current_limited(x):
         limit = BinaryTools.unpack('uint16', x, 0x00)
         max_amp = BinaryTools.unpack('uint16', x, 0x05)
-        percent = convert_ratio_to_percent(limit, max_amp)
 
         return {
             'event': 'Batt Dischg Cur Limited',
             'conditions':
-                '{limit} A ({percent}%), MinCell: {min_cell}mV, MaxPackTemp: {temp}C'.format(
+                '{limit} A ({percent:.2f}%), MinCell: {min_cell}mV, MaxPackTemp: {temp}C'.format(
                     limit=limit,
                     min_cell=BinaryTools.unpack('uint16', x, 0x02),
                     temp=BinaryTools.unpack('uint8', x, 0x04),
                     max_amp=max_amp,
-                    percent=percent
+                    percent=convert_ratio_to_percent(limit, max_amp)
                 )
         }
 
