@@ -906,14 +906,22 @@ class LogData:
             current_fencepost_value = first_fencepost_value
             current_fencepost = self.event_fencepost(current_fencepost_value)
             while event_start is not None and event_start < entries_end:
-                event_start = log.index_of_sequence(current_fencepost)
+                next_event_start = log.index_of_sequence(current_fencepost, start=event_start + 1)
+                if next_event_start is not None:
+                    event_start = next_event_start
                 next_fencepost = self.next_event_fencepost(current_fencepost)
-                if event_start is not None:
-                    event_end = log.index_of_sequence(next_fencepost, event_start + 1)
-                    event_payload = raw_log[event_start + len(current_fencepost):event_end]
-                    event_log.append(event_payload)
-                    entries_count += 1
-                    current_fencepost = next_fencepost
+                event_end = log.index_of_sequence(next_fencepost, start=event_start + 1)
+                while event_end is None or event_end - event_start > 256:
+                    next_fencepost = self.next_event_fencepost(next_fencepost)
+                    event_end = log.index_of_sequence(next_fencepost, start=event_start + 1)
+                    if next_fencepost == current_fencepost:
+                        break
+                event_payload = raw_log[event_start + len(current_fencepost):event_end]
+                event_log.append(event_payload)
+                entries_count += 1
+                current_fencepost = next_fencepost
+                if event_end is None or event_end >= entries_end:
+                    break
 
         return entries_count, event_log
 
@@ -931,6 +939,8 @@ class LogData:
         if next_value == 0xfe:
             next_value = 0xff
         elif next_value == 0x00:
+            next_value = 0x01
+        if next_value > 0xff:
             next_value = 0x01
         return self.event_fencepost(next_value)
 
