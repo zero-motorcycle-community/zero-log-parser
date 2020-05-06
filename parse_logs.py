@@ -27,7 +27,8 @@ def main():
             if zero_log_parser.is_log_file_path(filename):
                 logfile_path = os.path.join(dir_path, filename)
                 new_output = os.path.splitext(logfile_path)[0] + output_suffix
-                zero_log_parser.parse_log(logfile_path, new_output)
+                logger = zero_log_parser.console_logger(filename, verbose=True)
+                zero_log_parser.parse_log(logfile_path, new_output, logger=logger)
 
 
 if __name__ == '__main__':

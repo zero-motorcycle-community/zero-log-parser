@@ -14,6 +14,7 @@ Usage:
 """
 
 import codecs
+import logging
 import os
 import re
 import string
@@ -127,7 +128,7 @@ class LogFile:
     Wrapper for our raw log file
     """
 
-    def __init__(self, file_path: str):
+    def __init__(self, file_path: str, logger=None):
         self.file_path = file_path
         self._data = bytearray()
         self.reload()
@@ -233,7 +234,7 @@ def hex_of_value(value):
     return str(value)
 
 
-def parse_entry(log_data, address, unhandled):
+def parse_entry(log_data, address, unhandled, logger=None):
     """
     Parse an individual entry from a LogFile into a human readable form
     """
@@ -241,7 +242,8 @@ def parse_entry(log_data, address, unhandled):
         header = log_data[address]
     # IndexError: bytearray index out of range
     except IndexError:
-        # print "IndexError log_data[%r]: forcing header_bad"%(address)
+        if logger:
+            logger.debug("IndexError log_data[%r]: forcing header_bad", address)
         header = 0
     # correct header offset as needed to prevent errors
     header_bad = header != 0xb2
@@ -251,7 +253,8 @@ def parse_entry(log_data, address, unhandled):
             header = log_data[address]
         except IndexError:
             # IndexError: bytearray index out of range
-            # print "IndexError log_data[%r]: forcing header_bad"%(address)
+            if logger:
+                logger.debug("IndexError log_data[%r]: forcing header_bad", address)
             header = 0
             header_bad = True
             break
@@ -780,12 +783,14 @@ class LogData:
     entries_count: Optional[int]
     entries: [str]
 
-    def __init__(self, log_file: LogFile):
+    def __init__(self, log_file: LogFile, logger=None):
+        self.logger = logger
         self.log_file = log_file
         self.log_version, self.header_info = self.get_version_and_header(log_file)
         self.entries_count, self.entries = self.get_entries_and_counts(log_file)
 
     def get_version_and_header(self, log: LogFile):
+        logger = self.logger
         sys_info = OrderedDict()
         log_version = REV0
         if len(sys_info) == 0 and (self.log_file.is_mbb() or self.log_file.is_unknown()):
@@ -815,14 +820,17 @@ class LogData:
                 sys_info['Board rev.'] = log.unpack_str(0x05C, count=8)
                 model_offset = 0x019
             else:
-                print("Unknown Log Format")
+                if logger:
+                    logger.warning("Unknown Log Format")
                 sys_info['VIN'] = vin_v0
                 model_offset = 0x27f
             filename_vin = self.log_file.get_filename_vin()
             if 'VIN' not in sys_info or not BinaryTools.is_printable(sys_info['VIN']):
-                print("VIN unreadable", sys_info['VIN'])
+                if logger:
+                    logger.warning("VIN unreadable: %s", sys_info['VIN'])
             elif sys_info['VIN'] != filename_vin:
-                raise ValueError()
+                if logger:
+                    logger.warning("VIN mismatch: header:%s filename:%s", sys_info['VIN'], filename_vin)
             sys_info['Model'] = log.unpack_str(model_offset, count=3)
             sys_info['Initial date'] = log.unpack_str(0x2a, count=20)
         if len(sys_info) == 0 and (self.log_file.is_bms() or self.log_file.is_unknown()):
@@ -835,7 +843,8 @@ class LogData:
             elif log_version_code == 0x79:
                 log_version = REV2
             else:
-                print("Unknown Log Format", log_version_code)
+                if logger:
+                    logger.warning("Unknown Log Format: %s", log_version_code)
             sys_info['Initial date'] = log.unpack_str(0x12, count=20)
             if log_version == REV0:
                 sys_info['BMS serial number'] = log.unpack_str(0x300, count=21)
@@ -851,6 +860,7 @@ class LogData:
         return log_version, sys_info
 
     def get_entries_and_counts(self, log: LogFile):
+        logger = self.logger
         raw_log = log.raw()
         if self.log_version < REV2:
             # handle missing header index
@@ -876,7 +886,8 @@ class LogData:
             # count entry headers
             entries_count = event_log.count(b'\xb2')
 
-            print('{} entries found ({} claimed)'.format(entries_count, claimed_entries_count))
+            if logger:
+                logger.info('%d entries found (%d claimed)', entries_count, claimed_entries_count)
         elif self.log_version == REV2:
             self.gen3_fencepost_byte0 = raw_log[0x0a]  # before log_type
             self.gen3_fencepost_byte2 = raw_log[0x0c]  # before log_type
@@ -978,23 +989,28 @@ class LogData:
                         event=event_message))
             f.write('\n')
         if unhandled > 0:
-            print('{} exceptions in parser'.format(unhandled))
+            if self.logger:
+                self.logger.info('%d exceptions in parser', unhandled)
         if unknown:
-            print('{} unknown entries of types {}'.format(unknown_entries,
-                                                          ', '.join(
-                                                              hex(ord(x)) for x in unknown),
-                                                          '02x'))
-        print('Saved to {}'.format(output_file))
+            if self.logger:
+                self.logger.info('%d unknown entries of types %s',
+                                 unknown_entries,
+                                 ', '.join(hex(ord(x)) for x in unknown))
+            print('Saved to {}'.format(output_file))
+
+        if self.logger:
+            self.logger.info('Saved to %s', output_file)
 
 
-def parse_log(bin_file: str, output_file: str):
+def parse_log(bin_file: str, output_file: str, logger: Optional[logging.Logger] = None):
     """
     Parse a Zero binary log file into a human readable text file
     """
-    print('Parsing {}'.format(bin_file))
+    if logger:
+        logger.info('Parsing %s', bin_file)
 
-    log = LogFile(bin_file)
-    log_data = LogData(log)
+    log = LogFile(bin_file, logger=logger)
+    log_data = LogData(log, logger=logger)
 
     log_data.emit_zero_compatible_decoding(output_file)
 
@@ -1007,15 +1023,27 @@ def is_log_file_path(file_path: str):
     return file_path.endswith('.bin')
 
 
+def console_logger(name: str, verbose=False):
+    log_level = logging.NOTSET if verbose else logging.INFO
+    logger = logging.Logger(name, level=log_level)
+    logger_formatter = logging.Formatter('%(asctime)s [%(name)s] [%(levelname)s] %(message)s')
+    logger_handler = logging.StreamHandler()
+    logger_handler.setFormatter(logger_formatter)
+    logger.addHandler(logger_handler)
+    return logger
+
+
 def main():
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('bin_file', help='Zero *.bin log to decode')
     parser.add_argument('-o', '--output', help='decoded log filename')
+    parser.add_argument('-v', '--verbose', help='additional logging')
     args = parser.parse_args()
     log_file = args.bin_file
     output_file = args.output or default_parsed_output_for(args.bin_file)
-    parse_log(log_file, output_file)
+    logger = console_logger(log_file, verbose=args.verbose)
+    parse_log(log_file, output_file, logger=logger)
 
 
 if __name__ == '__main__':

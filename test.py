@@ -95,7 +95,9 @@ class TestLogParser(unittest.TestCase):
         actual_path = os.path.join(self.test_dir, 'log_output.txt')
         with open(os.devnull, 'w') as devnull:
             with contextlib.redirect_stdout(devnull):
-                parser.parse_log(logfile, actual_path)
+                logger = parser.console_logger(logfile, verbose=True)
+                logger.disabled = True
+                parser.parse_log(logfile, actual_path, logger=logger)
         expected_path = parser.default_parsed_output_for(logfile)
         with io.open(expected_path, 'r') as expected_file:
             expected_lines = list(expected_file)
