@@ -870,11 +870,13 @@ REV1 = 1
 REV2 = 2
 
 
-class LogData:
-    log_version: int
-    header_info: Dict[str, str]
-    entries_count: Optional[int]
-    entries: [str]
+class LogData(object):
+    """
+    :type log_version: int
+    :type header_info: Dict[str, str]
+    :type entries_count: Optional[int]
+    :type entries: [str]
+    """
 
     def __init__(self, log_file: LogFile, logger=None):
         self.logger = logger
@@ -1022,7 +1024,7 @@ class LogData:
         return bytes([self.gen3_fencepost_byte0, value, self.gen3_fencepost_byte2])
 
     def next_event_fencepost(self, previous_event_fencepost):
-        previous_value: int = 0
+        previous_value = 0
         if isinstance(previous_event_fencepost, int):
             previous_value = previous_event_fencepost
         elif isinstance(previous_event_fencepost, bytes):
