@@ -26,6 +26,7 @@ from typing import Dict, Optional, Union
 
 TIME_FORMAT = '%m/%d/%Y %H:%M:%S'
 USE_MBB_TIME = True
+MBB_TIMESTAMP_GMT_OFFSET = 7 * 60 * 60
 
 
 # noinspection PyMissingOrEmptyDocstring
@@ -761,10 +762,10 @@ def parse_entry(log_data, address, unhandled, logger=None):
     if timestamp > 0xfff:
         if USE_MBB_TIME:
             # The output from the MBB (via serial port) lists time as GMT-7
-            entry['time'] = strftime(TIME_FORMAT,
-                                     gmtime(timestamp - 7 * 60 * 60))
+            timestamp_corrected = gmtime(timestamp - MBB_TIMESTAMP_GMT_OFFSET)
         else:
-            entry['time'] = strftime(TIME_FORMAT, localtime(timestamp))
+            timestamp_corrected = localtime(timestamp)
+        entry['time'] = strftime(TIME_FORMAT, timestamp_corrected)
     else:
         entry['time'] = str(timestamp)
 
