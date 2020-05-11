@@ -775,7 +775,7 @@ def parse_gen3_entry(entry_payload: bytearray):
     payload_string = BinaryTools.unpack_str(entry_payload, 0, len(entry_payload))
     event_message = payload_string
     event_conditions = ''
-    conditions = {}
+    conditions = OrderedDict()
     conditions_str = ''
     if '. ' in payload_string:
         sentences = payload_string.split(sep='. ')
@@ -802,10 +802,8 @@ def parse_gen3_entry(entry_payload: bytearray):
         [event_message, event_conditions] = payload_string.split(' from ', maxsplit=1)
         match = re.match(r'(.*) to (.*)', event_conditions)
         if match:
-            conditions = {
-                'from': match.group(1),
-                'to': match.group(2)
-            }
+            conditions['from'] = match.group(1)
+            conditions['to'] = match.group(2)
             event_conditions = ''
     else:
         match = re.match(r'([^()]+) \(([^()]+)\)', payload_string)
