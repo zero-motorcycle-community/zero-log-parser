@@ -18,6 +18,13 @@ def logfile_test_generator(logfile):
     return test
 
 
+def lines_from_log_path(log_path: str) -> [str]:
+    if os.path.isfile(log_path):
+        with io.open(log_path, 'r', encoding='utf8') as log_file:
+            return list(log_file)
+    return []
+
+
 class TestLogParser(unittest.TestCase):
     def setUp(self):
         # Create a temporary directory
@@ -90,21 +97,26 @@ class TestLogParser(unittest.TestCase):
                     self.assertEqual(expected_line, actual_line,
                                      msg='same entries at line: {}'.format(line_no))
 
-    def _test_can_process_logfile(self, logfile: str):
+    def _test_can_process_logfile(self, logfile: str, suppress_logging=True):
         # with self.subTest('zero_log_parser can handle this log file: ' + logfile, file=logfile):
         actual_path = os.path.join(self.test_dir, 'log_output.txt')
-        with open(os.devnull, 'w') as devnull:
-            with contextlib.redirect_stdout(devnull):
-                logger = parser.console_logger(logfile, verbose=True)
-                logger.disabled = True
-                parser.parse_log(logfile, actual_path, logger=logger)
+        logger = parser.console_logger(logfile, verbose=True)
+        if suppress_logging:
+            with open(os.devnull, 'w') as devnull:
+                with contextlib.redirect_stdout(devnull):
+                    logger.disabled = True
+                    parser.parse_log(logfile, actual_path, logger=logger)
+        else:
+            parser.parse_log(logfile, actual_path, logger=logger)
         expected_path = parser.default_parsed_output_for(logfile)
-        with io.open(expected_path, 'r') as expected_file:
-            expected_lines = list(expected_file)
-        with io.open(actual_path, 'r') as actual_file:
-            actual_lines = list(actual_file)
-        expected_divider_index = expected_lines.index(parser.LogData.header_divider)
-        actual_divider_index = actual_lines.index(parser.LogData.header_divider)
+        expected_lines = lines_from_log_path(expected_path)
+        if len(expected_lines) == 0:
+            return
+        actual_lines = lines_from_log_path(actual_path)
+        divider = parser.LogData.header_divider
+        expected_divider_index = expected_lines.index(divider)
+        self.assertIn(divider, actual_lines)
+        actual_divider_index = actual_lines.index(divider)
         # with self.subTest('headers', section='header'):
         expected_header_lines = expected_lines[0:expected_divider_index - 3]
         actual_divider_lines = actual_lines[0:actual_divider_index - 3]
