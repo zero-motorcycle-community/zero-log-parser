@@ -23,7 +23,7 @@ from collections import OrderedDict, namedtuple
 from datetime import datetime, timedelta
 from math import trunc
 from time import gmtime, localtime, strftime
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Union
 
 ZERO_TIME_FORMAT = '%m/%d/%Y %H:%M:%S'
 # The output from the MBB (via serial port) lists time as GMT-7
@@ -328,9 +328,8 @@ class Gen2:
         return {
             'event': 'Charged To Full',
             'conditions':
-                '{AH:03.0f} AH, SOC: {SOC}%,         L:{L},         H:{H}, B:{B:03d}, '
-                'PT:{PT:03d}C, BT:{BT:03d}C, PV:{PV:6d}'.format_map(
-                    fields)
+                ('{AH:03.0f} AH, SOC: {SOC}%,         L:{L},         H:{H}, B:{B:03d}, '
+                 'PT:{PT:03d}C, BT:{BT:03d}C, PV:{PV:6d}').format_map(fields)
         }
 
     @classmethod
@@ -340,9 +339,8 @@ class Gen2:
         return {
             'event': 'Discharged To Low',
             'conditions':
-                '{AH:03.0f} AH, SOC:{SOC:3d}%,         L:{L},         H:{H}, B:{B:03d}, '
-                'PT:{PT:03d}C, BT:{BT:03d}C, PV:{PV:6d}'.format_map(
-                    fields)
+                ('{AH:03.0f} AH, SOC:{SOC:3d}%,         L:{L},         H:{H}, B:{B:03d}, '
+                 'PT:{PT:03d}C, BT:{BT:03d}C, PV:{PV:6d}').format_map(fields)
         }
 
     @classmethod
@@ -356,8 +354,9 @@ class Gen2:
         return {
             'event': 'SOC adjusted for voltage',
             'conditions':
-                'old:   {old}uAH (soc:{old_soc}%), new:   {new}uAH (soc:{new_soc}%), low cell: {'
-                'low} mV'.format(
+                ('old:   {old}uAH (soc:{old_soc}%), '
+                 'new:   {new}uAH (soc:{new_soc}%), '
+                 'low cell: {low} mV').format(
                     old=BinaryTools.unpack('uint32', x, 0x00),
                     old_soc=BinaryTools.unpack('uint8', x, 0x04),
                     new=BinaryTools.unpack('uint32', x, 0x05),
@@ -367,11 +366,6 @@ class Gen2:
 
     @classmethod
     def bms_curr_sens_zero(cls, x):
-        fields = {
-            'old': BinaryTools.unpack('uint16', x, 0x00),
-            'new': BinaryTools.unpack('uint16', x, 0x02),
-            'corrfact': BinaryTools.unpack('uint8', x, 0x04)
-        }
         return {
             'event': 'Current Sensor Zeroed',
             'conditions': 'old: {old}mV, new: {new}mV, corrfact: {corrfact}'.format(
@@ -420,8 +414,10 @@ class Gen2:
                 state='Contactor was ' +
                       ('Closed' if BinaryTools.unpack('bool', x, 0x0) else 'Opened')),
             'conditions':
-                'Pack V: {pv}mV, Switched V: {sv}mV, Prechg Pct: {pc:2.0f}%, Dischg Cur: {'
-                'dc}mA'.format(
+                ('Pack V: {pv}mV, '
+                 'Switched V: {sv}mV, '
+                 'Prechg Pct: {pc:2.0f}%, '
+                 'Dischg Cur: {dc}mA').format(
                     pv=pack_voltage,
                     sv=switched_voltage,
                     pc=convert_ratio_to_percent(switched_voltage, pack_voltage),
@@ -513,11 +509,15 @@ class Gen2:
         return {
             'event': 'Riding',
             'conditions':
-                'PackTemp: h {pack_temp_hi}C, l {pack_temp_low}C, PackSOC:{soc:3d}%, '
-                'Vpack:{pack_voltage:7.3f}V, MotAmps:{motor_current:4d}, BattAmps:{'
-                'battery_current:4d}, Mods: {mods}, MotTemp:{motor_temp:4d}C, CtrlTemp:{'
-                'controller_temp:4d}C, AmbTemp:{ambient_temp:4d}C, MotRPM:{rpm:4d}, '
-                'Odo:{odometer:5d}km'.format(
+                ('PackTemp: h {pack_temp_hi}C, l {pack_temp_low}C, '
+                 'PackSOC:{soc:3d}%, '
+                 'Vpack:{pack_voltage:7.3f}V, '
+                 'MotAmps:{motor_current:4d}, BattAmps:{battery_current:4d}, '
+                 'Mods: {mods}, '
+                 'MotTemp:{motor_temp:4d}C, CtrlTemp:{controller_temp:4d}C, '
+                 'AmbTemp:{ambient_temp:4d}C, '
+                 'MotRPM:{rpm:4d}, '
+                 'Odo:{odometer:5d}km').format(
                     pack_temp_hi=BinaryTools.unpack('uint8', x, 0x0),
                     pack_temp_low=BinaryTools.unpack('uint8', x, 0x1),
                     soc=BinaryTools.unpack('uint16', x, 0x2),
@@ -535,16 +535,6 @@ class Gen2:
 
     @classmethod
     def charging_status(cls, x):
-        fields = {
-            'pack_temp_hi': BinaryTools.unpack('uint8', x, 0x00),
-            'pack_temp_low': BinaryTools.unpack('uint8', x, 0x01),
-            'soc': BinaryTools.unpack('uint16', x, 0x02),
-            'pack_voltage': convert_mv_to_v(BinaryTools.unpack('uint32', x, 0x4)),
-            'battery_current': BinaryTools.unpack('int8', x, 0x08),
-            'mods': BinaryTools.unpack('uint8', x, 0x0c),
-            'ambient_temp': BinaryTools.unpack('int8', x, 0x0d),
-        }
-
         return {
             'event': 'Charging',
             'conditions':
@@ -571,8 +561,8 @@ class Gen2:
         return {
             'event': 'SEVCON CAN EMCY Frame',
             'conditions':
-                'Error Code: 0x{code:04X}, Error Reg: 0x{reg:02X}, Sevcon Error Code: 0x{'
-                'sevcon_code:04X}, Data: {data}, {cause}'.format(
+                ('Error Code: 0x{code:04X}, Error Reg: 0x{reg:02X}, '
+                 'Sevcon Error Code: 0x{sevcon_code:04X}, Data: {data}, {cause}').format(
                     code=BinaryTools.unpack('uint16', x, 0x00),
                     reg=BinaryTools.unpack('uint8', x, 0x04),
                     sevcon_code=BinaryTools.unpack('uint16', x, 0x02),
@@ -636,9 +626,9 @@ class Gen2:
                 batcurr=battery_current
             )
         elif event_name == closing_contactor:
-            conditions_msg = 'vmod: {modvolt:7.3f}V, maxsys: {sysmax:7.3f}V, minsys: {' \
-                             'sysmin:7.3f}V, diff: {diff:0.03f}V, vcap: {vcap:6.3f}V, prechg: {' \
-                             'prechg:2.0f}%'.format(
+            conditions_msg = ('vmod: {modvolt:7.3f}V, maxsys: {sysmax:7.3f}V, '
+                              'minsys: {sysmin:7.3f}V, diff: {diff:0.03f}V, vcap: {vcap:6.3f}V, '
+                              'prechg: {prechg:2.0f}%').format(
                 modvolt=mod_volt,
                 sysmax=sys_max,
                 sysmin=sys_min,
@@ -730,11 +720,15 @@ class Gen2:
         return {
             'event': 'Disarmed',
             'conditions':
-                'PackTemp: h {pack_temp_hi}C, l {pack_temp_low}C, PackSOC:{soc:3d}%, '
-                'Vpack:{pack_voltage:03.3f}V, MotAmps:{motor_current:4d}, BattAmps:{'
-                'battery_current:4d}, Mods: {mods:02b}, MotTemp:{motor_temp:4d}C, CtrlTemp:{'
-                'controller_temp:4d}C, AmbTemp:{ambient_temp:4d}C, MotRPM:{rpm:4d}, '
-                'Odo:{odometer:5d}km'.format(
+                ('PackTemp: h {pack_temp_hi}C, l {pack_temp_low}C, '
+                 'PackSOC:{soc:3d}%, '
+                 'Vpack:{pack_voltage:03.3f}V, '
+                 'MotAmps:{motor_current:4d}, BattAmps:{battery_current:4d}, '
+                 'Mods: {mods:02b}, '
+                 'MotTemp:{motor_temp:4d}C, CtrlTemp:{controller_temp:4d}C, '
+                 'AmbTemp:{ambient_temp:4d}C, '
+                 'MotRPM:{rpm:4d}, '
+                 'Odo:{odometer:5d}km').format(
                     pack_temp_hi=BinaryTools.unpack('uint8', x, 0x0),
                     pack_temp_low=BinaryTools.unpack('uint8', x, 0x1),
                     soc=BinaryTools.unpack('uint16', x, 0x2),
@@ -1172,10 +1166,10 @@ class LogData(object):
     def has_official_output_reference(self):
         return self.log_version < REV2
 
-    def emit_tabular_decoding(self, output_file: str, format='tsv', omit_units=False, logger=None):
-        file_suffix = '.tsv' if format == 'tsv' else '.csv'
+    def emit_tabular_decoding(self, output_file: str, out_format='tsv', logger=None):
+        file_suffix = '.tsv' if out_format == 'tsv' else '.csv'
         tabular_output_file = output_file.replace('.txt', file_suffix, 1)
-        field_sep = '\t' if format == 'tsv' else ','
+        field_sep = '\t' if out_format == 'tsv' else ','
         record_sep = '\n'
         headers = ['entry', 'timestamp', 'message', 'conditions', 'uninterpreted']
         with open(tabular_output_file, 'w') as output:
