@@ -1190,6 +1190,14 @@ class LogData(object):
                 write_row([print_value_tabular(x) for x in row_values])
         logger_for_input(self.log_file.file_path).info('Saved to %s', tabular_output_file)
 
+    @classmethod
+    def output_line_number_field(cls, line: int):
+        return ' {line:05d}'.format(line=line)
+
+    @classmethod
+    def output_time_field(cls, time: str):
+        return '     {time:>19s}'.format(time=time)
+
     def emit_zero_compatible_decoding(self, output_file: str, logger=None):
         with codecs.open(output_file, 'wb', 'utf-8-sig') as f:
             logger = logger_for_input(self.log_file.file_path)
@@ -1223,6 +1231,8 @@ class LogData(object):
                     entry_payload['line'] = entry_num + 1
 
                     conditions = entry_payload.get('conditions')
+                    line_prefix = (self.output_line_number_field(entry_payload['line'])
+                                   + self.output_time_field(entry_payload['time']))
                     if conditions:
                         if '???' in conditions:
                             u = conditions[0]
@@ -1231,33 +1241,29 @@ class LogData(object):
                                 unknown.append(u)
                             conditions = '???'
                             write_line(
-                                ' {line:05d}     {time:>19s}   {event} {conditions}'.format(
+                                line_prefix + '   {event} {conditions}'.format(
                                     **entry_payload))
                         else:
                             write_line(
-                                ' {line:05d}     {time:>19s}   {event:25}  {conditions}'.format(
+                                line_prefix + '   {event:25}  {conditions}'.format(
                                     **entry_payload))
                     else:
-                        write_line(' {line:05d}     {time:>19s}   {event}'.format(**entry_payload))
+                        write_line(line_prefix + '   {event}'.format(**entry_payload))
 
                     read_pos += length
             else:
                 for line, entry_payload in enumerate(self.entries):
                     entry = Gen3.payload_to_entry(entry_payload, logger=logger)
                     conditions = entry.conditions
+                    line_prefix = (self.output_line_number_field(line)
+                                   + self.output_time_field(entry.time.strftime(ZERO_TIME_FORMAT)))
                     if conditions:
-                        output_line = ' {line:05d}     {time:>19s}   {event:25}  ({conditions}) [' \
-                                      '{uninterpreted}]'.format(
-                            line=line,
-                            time=entry.time.strftime(ZERO_TIME_FORMAT),
+                        output_line = line_prefix + '   {event:25}  ({conditions}) [{uninterpreted}]'.format(
                             event=entry.event,
                             conditions=entry.conditions,
                             uninterpreted=entry.uninterpreted)
                     else:
-                        output_line = ' {line:05d}     {time:>19s}   {event} [{' \
-                                      'uninterpreted}]'.format(
-                            line=line,
-                            time=entry.time.strftime(ZERO_TIME_FORMAT),
+                        output_line = line_prefix + '   {event} [{uninterpreted}]'.format(
                             event=entry.event,
                             uninterpreted=entry.uninterpreted)
                     if re.match(r'\s+\[', output_line):
@@ -1274,11 +1280,13 @@ class LogData(object):
         logger.info('Saved to %s', output_file)
 
 
-def parse_log(bin_file: str, output_file: str, utc_offset_hours=None):
+def parse_log(bin_file: str, output_file: str, utc_offset_hours=None, verbose=False, logger=None):
     """
     Parse a Zero binary log file into a human readable text file
     """
-    logger_for_input(bin_file).info('Parsing %s', bin_file)
+    if not logger:
+        logger = console_logger(bin_file, verbose=verbose)
+    logger.info('Parsing %s', bin_file)
 
     if isinstance(utc_offset_hours, int):
         timezone_offset = utc_offset_hours * 60 * 60
@@ -1327,9 +1335,8 @@ def main():
     args = parser.parse_args()
     log_file = args.bin_file
     output_file = args.output or default_parsed_output_for(args.bin_file)
-    logger = console_logger(log_file, verbose=args.verbose)
     tz_code = args.timezone
-    parse_log(log_file, output_file, utc_offset_hours=tz_code)
+    parse_log(log_file, output_file, utc_offset_hours=tz_code, verbose=args.verbose)
 
 
 if __name__ == '__main__':
