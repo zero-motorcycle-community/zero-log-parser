@@ -1,6 +1,6 @@
 # Zero Log Parser
 
-## **An attempt to rewrite the parser using [Kaitai Struct]https://kaitai.io/#what-is-it **
+## **An attempt to rewrite the parser using [Kaitai Struct](https://kaitai.io/#what-is-it) **
  
 This is a small decoder utility to parse Zero Motorcycle main bike board (MBB) and battery management system (BMS) logs.
 * It is designed to emulate Zero Motorcycles' own official log parser, that turns the binary-encoded event log into a mostly-readable text file.
