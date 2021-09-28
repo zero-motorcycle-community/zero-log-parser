@@ -1,0 +1,67 @@
+meta:
+  id: zlog-bms
+  title: A parser for Zero motorcycle Gen 3 BMS binary log files
+  endian: le
+  #bit-endian: le
+
+seq:
+  - id: Partial #```````````Partial log till next 0xb2 entry  
+    terminator: 0xB2
+    consume: false # So next stream can read/start from 0xB2
+    doc: "Find first valid log entry"  
+
+  - id: log_entry
+    type: log_entries
+    repeat: until
+    repeat-until: _io.eof
+
+types:
+# from ttyConsol: Entry / Time of Log / UTC|Code / Event description; and data
+  log_entries:
+    seq:
+    - id: header_begin
+      contents: [0xB2]
+    - id: length
+      type: u1
+      doc: "Data is sometimes less then <length> bytes. Calculated different then MBB"
+    - id: log_type
+      type: u1
+      doc: "0xFD 0x4D"
+    - id: timestamp
+      type: u4
+    - id: unknown_header_section
+      terminator: 0xF9
+      #size: 4 #--often four but not always(or corrupted entry?) <--MBB... (BMS also?)
+#    - id: count
+#     type: u1
+#     doc: 'seems to increment for every 0xB2 record'
+#    - id: header_end
+#      contents: [0xF9]  # 0xF8=>Serial Log Console <--MBB... (BMS also?)
+    - id: data
+      type:
+        switch-on: log_type
+        cases:
+          0x4d: log_type_4_d
+          0xfd: capacity_estimate
+          _: log_type_unknown
+
+  log_type_4_d:
+    seq:
+      - id: data
+        eos-error: false
+        terminator: 0xB2
+        consume: false
+  capacity_estimate:
+    seq:
+      - id: data
+        type: str
+        encoding: ASCII
+        eos-error: false
+        terminator: 0xB2
+        consume: false
+  log_type_unknown:
+    seq:
+      - id: data
+        eos-error: false
+        terminator: 0xB2
+        consume: false
