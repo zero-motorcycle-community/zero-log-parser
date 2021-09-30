@@ -111,7 +111,7 @@ types:
 #      pos: unknown_header_section.eos
 
 # CHARGERS| EN | DC V   A | AC V   A  HZ |CMD A| Ver |   SN   | ID  | STATUS
-#   3kW ,   0,   0.0,  0.0,  0,   0.0,  0,  0,   201, 2052093, 0x010, 0x0020
+#   3kW ,   0,   0.0,  0.0,  0,   0.0,  0,  0,   201, 0000000, 0x010, 0x0020
   charger_info:
     seq:
       - id: name
