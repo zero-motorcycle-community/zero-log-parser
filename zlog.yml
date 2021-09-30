@@ -97,7 +97,7 @@ types:
       type:
         switch-on: log_type
         cases:
-          0x48: log_type_48
+          0x48: charger_info
           0x49: log_type_49
           0x51: log_type_51
           0x52: log_type_52
@@ -110,10 +110,48 @@ types:
 #    header:
 #      pos: unknown_header_section.eos
 
-
-  log_type_48:
+# CHARGERS| EN | DC V   A | AC V   A  HZ |CMD A| Ver |   SN   | ID  | STATUS
+#   3kW ,   0,   0.0,  0.0,  0,   0.0,  0,  0,   201, 2052093, 0x010, 0x0020
+  charger_info:
     seq:
+      - id: name
+        type: str
+        encoding: ASCII
+        size: 10
+      - id: maybe_bits
+        size: 2
+        doc: "Always? 0x80 0x40"
+      - id: maybe_floats
+        terminator: 60
+        consume: false
+        doc: "size varies"
+      - id: hertz
+        size: 1
+        doc: "Always? 0x3C could be hertz or header end"
+      - id: val
+        size: 1
+    #  - id: en
+    #    size: 1
+    #  - id: d_c_volts
+    #    type: f4
+    #  - id: d_c_amps
+    #    type: f4 
+    #  - id: a_c_volts
+    #    size: 1 
+    #  - id: a_c_amps
+    #    type: f4
+    #  - id: c_m_da
+    #    size: 1
+    #  - id: status
+    #    size: 1
+      - id: i_d
+        size: 1
+      - id: version
+        type: u2
+      - id: serial_number
+        type: u4
       - id: data
+      #  size: 11
         eos-error: false
         terminator: 0xB2
         consume: false
