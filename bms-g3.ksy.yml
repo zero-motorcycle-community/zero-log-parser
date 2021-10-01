@@ -1,11 +1,11 @@
 meta:
-  id: zlog-bms
+  id: zlog_bms
   title: A parser for Zero motorcycle Gen 3 BMS binary log files
   endian: le
   #bit-endian: le
 
 seq:
-  - id: Partial #```````````Partial log till next 0xb2 entry  
+  - id: partial #```````````Partial log till next 0xb2 entry  
     terminator: 0xB2
     consume: false # So next stream can read/start from 0xB2
     doc: "Find first valid log entry"  
@@ -16,7 +16,6 @@ seq:
     repeat-until: _io.eof
 
 types:
-# from ttyConsol: Entry / Time of Log / UTC|Code / Event description; and data
   log_entries:
     seq:
     - id: header_begin
@@ -26,12 +25,15 @@ types:
       doc: "Data is sometimes less then <length> bytes. Calculated different then MBB"
     - id: log_type
       type: u1
-      doc: "0xFD 0x4D"
-    - id: timestamp
-      type: u4
-    - id: unknown_header_section
+      doc: "0xFD 0x4B 0x4D"
+    # when length 0x6B: 0xFE or <variable> 0xFE is inserted before timestamp.  variable increments by three
+    # 0x40->0x43. Sometimes nothing inserted though (smh)
+#   - id: timestamp
+#      type: u4
+    - id: header
       terminator: 0xF9
-      #size: 4 #--often four but not always(or corrupted entry?) <--MBB... (BMS also?)
+      doc: "Process <data-somtimes>,timestamp,<data:null>,sequence-number at program SW level for now"
+      #size: 4
 #    - id: count
 #     type: u1
 #     doc: 'seems to increment for every 0xB2 record'
@@ -41,10 +43,17 @@ types:
       type:
         switch-on: log_type
         cases:
-          0x4d: log_type_4_d
-          0xfd: capacity_estimate
+          0x4B: log_type_4_b
+          0x4D: log_type_4_d
+          0xFD: capacity_estimate
           _: log_type_unknown
 
+  log_type_4_b:
+    seq:
+      - id: data
+        eos-error: false
+        terminator: 0xB2
+        consume: false
   log_type_4_d:
     seq:
       - id: data
