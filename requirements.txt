@@ -1,2 +1,19 @@
-ddt==1.2.2
--e git+git@github.com:zero-motorcycle-community/zero-log-parser.git@8768c6810e4514dbe344f8386876bc410c924b96#egg=Zero_log_parser
+# Production dependencies
+# This package has no runtime dependencies - it uses only Python standard library
+
+# Optional plotting dependencies (install with: pip install -e ".[plotting]")
+# plotly>=5.0
+# pandas>=1.5.0
+
+# Development dependencies (install with: pip install -e ".[dev]")
+# pytest>=7.0
+# pytest-cov>=4.0
+# black>=23.0
+# ruff>=0.1.0
+# mypy>=1.0
+# plotly>=5.0
+# pandas>=1.5.0
+
+# Test dependencies (install with: pip install -e ".[test]")
+# pytest>=7.0
+# pytest-cov>=4.0
