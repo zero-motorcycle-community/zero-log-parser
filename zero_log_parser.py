@@ -2430,7 +2430,24 @@ class LogData(object):
                                 sort_timestamp = 0
 
                         collected_entries.append((sort_timestamp, entry_payload, entry_num))
-                        read_pos += length
+                        # parse_entry resyncs `address` forward to the next 0xB2
+                        # and measures `length` from THERE, but returns only
+                        # `length` -- the resynced address is dropped on the
+                        # floor. Advancing `read_pos += length` therefore keeps
+                        # the walk permanently behind by the resync distance, so
+                        # it re-reads records it has already read and spends its
+                        # fixed `entries_count` budget doing it.
+                        # `.find` searches the buffer in place, without copying it.
+                        _sync = self.entries.find(b'\xb2', read_pos)
+                        if _sync < 0:
+                            break
+                        if length > 0:
+                            read_pos = _sync + length
+                        else:
+                            # A delimiter with a zero length byte; step past it
+                            # so the walk cannot freeze here.
+                            _next = self.entries.find(b'\xb2', _sync + 1)
+                            read_pos = _next if _next > read_pos else read_pos + 1
                     except Exception as e:
                         logger.warning(f'Error parsing entry {entry_num}: {e}')
                         break
