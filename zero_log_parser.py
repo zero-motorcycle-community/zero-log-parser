@@ -2284,6 +2284,11 @@ REV0 = 0
 REV1 = 1
 REV2 = 2
 REV3 = 3  # Ring buffer format (2024+ firmware)
+REV_UNKNOWN = -1  # No legacy VIN offset validated and no ring-buffer marker found;
+                  # distinct from REV0 so these files aren't silently counted as
+                  # successfully-identified REV0 logs. Sorts before REV0-REV3 but
+                  # still satisfies `< REV2`, so entry-walking behavior for these
+                  # files is unchanged (see get_entries_and_counts).
 
 
 class LogData(object):
@@ -2613,8 +2618,39 @@ class LogData(object):
         sys_info = OrderedDict()
         log_version = REV0
         if len(sys_info) == 0 and (self.log_file.is_mbb() or self.log_file.is_unknown()):
-            # Check for ring buffer format (2024+ firmware) - starts with log entries
-            if log.raw()[0] == 0xb2 or (len(log.raw()) == 0x40000 and log.index_of_sequence(b'\xa1\xa1\xa1\xa1')):
+            # Ring buffer format (2024+ firmware) files start directly with log
+            # entries, so byte 0 == 0xb2 is a high-confidence, unconditional
+            # signal on its own (no legacy-format file can match it: byte 0 of
+            # a legacy file is always 'M' or 'B', the start of its "MBB\0"/
+            # "BMS\0" magic). Check that first and independently of everything
+            # else below.
+            #
+            # The \xa1\xa1\xa1\xa1-anywhere fallback below is NOT unconditional
+            # like that: classic REV0/REV1 files are also almost always exactly
+            # 262144 bytes, and they carry their own unrelated \xa1\xa1\xa1\xa1
+            # fencepost near their own header (~offset 0x26, for their "first
+            # run date" field), which index_of_sequence finds just as readily
+            # as a genuine late-file ring-buffer marker. So try the classic
+            # legacy layout FIRST here: a validated VIN at one of its three
+            # known, narrow offsets is a much sharper positive signal than "a
+            # 262144-byte file that contains this 4-byte sequence somewhere",
+            # and only fall through to the ring-buffer fallback if none of the
+            # three legacy offsets produce a VIN at all.
+            #
+            # Kept lazy (only called from inside the `and` chain below, never
+            # for a raw()[0] == 0xb2 file) so a short ring-buffer file isn't
+            # forced through 0x240/0x252/0x029 reads it may be too small for -
+            # those offsets are only ever meaningful, and only ever safe to
+            # read, on the classic 262144-byte layout this fallback targets.
+            def _legacy_vin_present():
+                v0 = log.unpack_str(0x240, count=17)  # v0 (Gen2)
+                v1 = log.unpack_str(0x252, count=17)  # v1 (Gen2 2019+)
+                v2 = log.unpack_str(0x029, count=17, encoding='latin_1')  # v2 (Gen3)
+                return is_vin(v0) or is_vin(v1) or is_vin(v2)
+
+            if log.raw()[0] == 0xb2 or (len(log.raw()) == 0x40000
+                                         and log.index_of_sequence(b'\xa1\xa1\xa1\xa1')
+                                         and not _legacy_vin_present()):
                 # Ring buffer format detected
                 log_version = REV3  # New revision for ring buffer format
                 filename_vin = self.log_file.get_filename_vin()
@@ -2692,7 +2728,24 @@ class LogData(object):
                     model_offset = 0x019
                 else:
                     logger.warning("Unknown Log Format")
+                    # Distinct sentinel, not REV0: none of the three legacy VIN
+                    # offsets validated here, so this file isn't a confirmed
+                    # REV0 log and shouldn't be indistinguishable from one
+                    # (see analysis/issue11_status.md, section 0b).
+                    log_version = REV_UNKNOWN
                     sys_info['VIN'] = vin_v0
+                    # Match REV3's pattern for fields we have no offset to read:
+                    # explicitly 'Unknown', not simply absent from sys_info.
+                    # Nothing downstream currently indexes these keys directly
+                    # without a presence check (verified: the text emitter only
+                    # iterates header_info.items(), the JSON emitter never reads
+                    # header_info for these fields at all - see
+                    # analysis/fix_rev3_detection.md - and the merge operators
+                    # guard with `key not in ...` before indexing), so this is
+                    # about consistent, honest output, not a crash fix.
+                    sys_info['Serial number'] = 'Unknown'
+                    sys_info['Firmware rev.'] = 'Unknown'
+                    sys_info['Board rev.'] = 'Unknown'
                     model_offset = 0x27f
 
                 filename_vin = self.log_file.get_filename_vin()
