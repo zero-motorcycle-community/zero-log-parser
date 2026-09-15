@@ -1521,6 +1521,107 @@ class Gen2:
         }
 
     @classmethod
+    def firmware_build_info(cls, x):
+        """Type 0x32: firmware build-info string. Shape confirmed against
+        real corpus samples in analysis/type_0x32.md and
+        analysis/type_0x32_decode.md: one leading byte of unidentified
+        meaning (doesn't block decode and doesn't correlate cleanly with
+        anything else checked - captured as opaque data, not interpreted),
+        a C-style build date/time string ("Aug  9 2019 14:22:32\\0"), and,
+        when anything follows that string's null terminator, one or more
+        further null-terminated ASCII fields - a build number and a flash
+        bank identifier ("banka"/"bankb") on every real sample seen at
+        22, 31, 32, and 38 bytes. The 38-byte form was confirmed directly,
+        not assumed from the shorter forms: real samples carry the same
+        two fields, just a longer (9-character, hex-shaped) build
+        identifier in the first one instead of a 2-3 digit number.
+
+        Anything that doesn't fit this shape - the date string failing to
+        parse, or the remainder not being clean null-terminated ASCII -
+        falls back to the same raw-hex report unhandled_entry_format()
+        already gives this type today, rather than guessing at field
+        names for structure that was never verified. One real corpus
+        occurrence (in a raw firmware-image file misidentified as a log
+        by filename, not a genuine log entry) hits exactly this path.
+        """
+        null_idx = x.find(b'\x00', 0x1)
+        if len(x) < 2 or null_idx == -1:
+            return cls.unhandled_entry_format(0x32, x)
+
+        leading_byte = BinaryTools.unpack('uint8', x, 0x0)
+        try:
+            date_str = x[0x1:null_idx].decode('ascii')
+        except UnicodeDecodeError:
+            return cls.unhandled_entry_format(0x32, x)
+
+        try:
+            build_time = datetime.strptime(date_str, '%b %d %Y %H:%M:%S')
+        except ValueError:
+            return cls.unhandled_entry_format(0x32, x)
+
+        structured_data = {
+            'leading_byte': leading_byte,
+            'build_date': build_time.strftime(ZERO_TIME_FORMAT),
+        }
+
+        # Bytes after the date string's own null terminator - confirmed
+        # empty on the 22-byte form, and a build number + flash bank on
+        # every longer form seen.
+        suffix = x[null_idx + 1:]
+        if suffix:
+            parts = suffix.split(b'\x00')
+            # A clean run of null-terminated ASCII fields splits into N
+            # field strings plus one trailing empty part (the byte past
+            # the last field's own terminator). Anything else - a
+            # dangling unterminated tail, or a field that isn't printable
+            # ASCII - is structure this report never confirmed; reported
+            # as raw hex instead of naming fields that were never seen.
+            clean = len(parts) > 1 and parts[-1] == b''
+            field_strs = []
+            if clean:
+                for part in parts[:-1]:
+                    try:
+                        field_str = part.decode('ascii')
+                    except UnicodeDecodeError:
+                        clean = False
+                        break
+                    if not all(32 <= ord(c) < 127 for c in field_str):
+                        clean = False
+                        break
+                    field_strs.append(field_str)
+
+            if clean and field_strs:
+                # Confirmed on the 22/31/32/38-byte forms alike: first
+                # extra field is a build number (plain digits on the
+                # shorter forms, a longer hex-shaped identifier on the
+                # 38-byte form - kept as a string either way it doesn't
+                # parse as a plain integer), second is the flash bank.
+                # Any further fields are outside what's been confirmed
+                # for this type - kept, not dropped, under a generic name.
+                build_number = field_strs[0]
+                structured_data['build_number'] = (
+                    int(build_number) if build_number.isdigit() else build_number
+                )
+                if len(field_strs) >= 2:
+                    structured_data['flash_bank'] = field_strs[1]
+                if len(field_strs) > 2:
+                    structured_data['build_info_extra_fields'] = field_strs[2:]
+            else:
+                structured_data['build_info_suffix_raw_hex'] = display_bytes_hex(suffix)
+
+        conditions = f"Built {structured_data['build_date']}"
+        if 'build_number' in structured_data:
+            conditions += f", build {structured_data['build_number']}"
+        if 'flash_bank' in structured_data:
+            conditions += f", {structured_data['flash_bank']}"
+
+        return {
+            'event': 'Firmware Build Info',
+            'conditions': conditions,
+            'structured_data': structured_data
+        }
+
+    @classmethod
     def battery_status(cls, x):
         opening_contactor = 'Opening Contractor'
         closing_contactor = 'Closing Contractor'
@@ -1968,6 +2069,7 @@ class Gen2:
             0x2f: "Sevcon Status",
             0x30: "Charger Status",
             0x31: "MBB BMS Isolation Fault",
+            0x32: "Firmware Build Info",
             0x33: "Battery Module Status",
             0x34: "Power State",
             0x35: "MBB Unknown Type 53",
@@ -2100,6 +2202,7 @@ class Gen2:
             0x2f: cls.sevcon_status,
             0x30: cls.charger_status,
             # 0x31: unknown, 1, 6350_MBB_2016-04-12, 0x31 0x00 ???
+            0x32: cls.firmware_build_info,
             0x33: cls.battery_status,
             0x34: cls.power_state,
             # 0x35: unknown, 5, 6472_MBB_2016-12-12, 0x35 0x00 0x46 0x01 0xcb 0xff ???
