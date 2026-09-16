@@ -27,6 +27,7 @@ remains an unconditional, independent signal for real ring-buffer files.
 """
 
 import os
+import struct
 import sys
 import tempfile
 
@@ -213,3 +214,21 @@ def test_unrecognized_format_header_has_no_missing_keys():
     for key in ("Serial number", "Firmware rev.", "Board rev."):
         assert key in header, f"{key!r} missing from header entirely (should be present, value 'Unknown')"
         assert header[key] == "Unknown"
+
+
+def test_rev1_board_rev_is_read_from_0x268():
+    """uint16 @ 0x268, confirmed against 1,982 true-REV1 corpus files as a
+    closed 8-value set with 93%+ per-VIN stability - see
+    analysis/rev1_board_rev.md and analysis/issue11_status.md section 0c.
+    2980 is the most common value found there, used here as a realistic
+    sample rather than an arbitrary sentinel."""
+    vin = make_vin("11686")
+    data = bytearray(build_classic_buffer(vin, vin_offset=0x252))
+    data[0x268:0x268 + 2] = struct.pack("<H", 2980)
+    path = _write_temp(bytes(data), suffix=f"_{vin}_MBB.bin")
+    try:
+        log_version, header = _parse(path)
+    finally:
+        os.unlink(path)
+    assert log_version == REV1
+    assert header["Board rev."] == 2980

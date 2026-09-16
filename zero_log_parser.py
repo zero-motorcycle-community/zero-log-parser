@@ -2717,7 +2717,16 @@ class LogData(object):
                     sys_info['Serial number'] = log.unpack_str(0x210, count=13)
                     sys_info['VIN'] = vin_v1
                     sys_info['Firmware rev.'] = log.unpack('uint16', 0x266)
-                    sys_info['Board rev.'] = log.unpack('uint16', 0x268)  # TODO confirm Board rev.
+                    # uint16 @ 0x268, directly after Firmware rev., mirroring
+                    # REV0's own Firmware rev./Board rev. layout. Confirmed
+                    # against 1,982 true-REV1 files: a closed set of 8
+                    # values, 93%+ per-VIN stable - see
+                    # analysis/rev1_board_rev.md and
+                    # analysis/issue11_status.md section 0c.
+                    try:
+                        sys_info['Board rev.'] = log.unpack('uint16', 0x268)
+                    except Exception:
+                        sys_info['Board rev.'] = 'Unknown'
                     model_offset = 0x26B
                 elif is_vin(vin_v2):
                     log_version = REV2
