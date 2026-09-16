@@ -2757,26 +2757,72 @@ class LogData(object):
                 sys_info['Model'] = log.unpack_str(model_offset, count=3)
                 sys_info['Initial date'] = log.unpack_str(0x2a, count=20)
         if len(sys_info) == 0 and (self.log_file.is_bms() or self.log_file.is_unknown()):
-            # Check for two log formats:
-            log_version_code = log.unpack('uint8', 0x4)
-            if log_version_code == 0xb6:
-                log_version = REV0
-            elif log_version_code == 0xde:
-                log_version = REV1
-            elif log_version_code == 0x79:
-                log_version = REV2
+            # Ring buffer format (2024+ firmware) files start directly with
+            # log entries, the same board-agnostic 0xb2 marker the MBB
+            # branch above checks for. Checked here first, before byte 0x4
+            # is read at all, so these files don't fall through into the
+            # classic dispatch below and get read against offsets that
+            # don't apply to them - see analysis/bms_serial_recovery.md
+            # Part 2. Not a reuse of the MBB branch's REV3 handling above:
+            # that branch's serial/date logic depends on locating an
+            # \xa1\xa1\xa1\xa1 fencepost that analysis/bms_serial_recovery.md
+            # Part 3 confirmed does not exist in these files, so this is
+            # separate, BMS-specific handling.
+            if log.raw()[0] == 0xb2:
+                log_version = REV3  # Ring buffer format
+                sys_info['Initial date'] = 'Unknown'
+
+                # Board serial: three shapes are known in the corpus
+                # (RKT-NNNNNNNN, SJNNNNZERNNNN, and a newer IMINNNNNNNNN
+                # batch), and none are matched directly here. The field is
+                # instead located by its null-byte boundaries - a printable
+                # run of 4+ characters bounded by null bytes on both sides,
+                # searched in the first 0x200 bytes where this header lives
+                # (analysis/bms_serial_recovery.md Part 3). A shape-specific
+                # regex tried during analysis silently mismatched two of the
+                # three known shapes and missed the third entirely, so this
+                # searches generically instead of assuming a shape - see
+                # analysis/bms_serial_recovery_followup.md Task 1.
+                header_bytes = log.raw()[:0x200]
+                board_match = re.search(rb'\x00{4,10}([\x21-\x7e]{4,20})\x00', header_bytes)
+                if board_match:
+                    board_offset = board_match.start(1)
+                    sys_info['BMS serial number'] = board_match.group(1).decode('ascii', 'replace')
+
+                    # Pack serial sits 16 bytes after the board serial's own
+                    # start. A few files have it shifted one byte later than
+                    # that; stripping leading nulls before the printability
+                    # check recovers those too (same source, Task 1).
+                    pack_field = bytes(header_bytes[board_offset + 16:board_offset + 32])
+                    pack_str = pack_field.lstrip(b'\x00').split(b'\x00')[0].decode('ascii', 'replace')
+                    if len(pack_str) >= 4 and BinaryTools.is_printable(pack_str):
+                        sys_info['Pack serial number'] = pack_str
+                    else:
+                        sys_info['Pack serial number'] = 'Unknown'
+                else:
+                    sys_info['BMS serial number'] = 'Unknown'
+                    sys_info['Pack serial number'] = 'Unknown'
             else:
-                logger.warning("Unknown Log Format: %s", log_version_code)
-            sys_info['Initial date'] = log.unpack_str(0x12, count=20)
-            if log_version == REV0:
-                sys_info['BMS serial number'] = log.unpack_str(0x300, count=21)
-                sys_info['Pack serial number'] = log.unpack_str(0x320, count=8)
-            elif log_version == REV1:
-                # TODO identify BMS serial number
-                sys_info['Pack serial number'] = log.unpack_str(0x331, count=8)
-            elif log_version == REV2:
-                sys_info['BMS serial number'] = log.unpack_str(0x038, count=13)
-                sys_info['Pack serial number'] = log.unpack_str(0x06c, count=7)
+                # Check for two log formats:
+                log_version_code = log.unpack('uint8', 0x4)
+                if log_version_code == 0xb6:
+                    log_version = REV0
+                elif log_version_code == 0xde:
+                    log_version = REV1
+                elif log_version_code == 0x79:
+                    log_version = REV2
+                else:
+                    logger.warning("Unknown Log Format: %s", log_version_code)
+                sys_info['Initial date'] = log.unpack_str(0x12, count=20)
+                if log_version == REV0:
+                    sys_info['BMS serial number'] = log.unpack_str(0x300, count=21)
+                    sys_info['Pack serial number'] = log.unpack_str(0x320, count=8)
+                elif log_version == REV1:
+                    # TODO identify BMS serial number
+                    sys_info['Pack serial number'] = log.unpack_str(0x331, count=8)
+                elif log_version == REV2:
+                    sys_info['BMS serial number'] = log.unpack_str(0x038, count=13)
+                    sys_info['Pack serial number'] = log.unpack_str(0x06c, count=7)
         elif self.log_file.is_unknown():
             sys_info['System info'] = 'unknown'
         return log_version, sys_info
