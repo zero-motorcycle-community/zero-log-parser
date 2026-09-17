@@ -1875,7 +1875,7 @@ class Gen2:
         )
 
         # Determine event name based on state - riding states show as "Riding" for plotting compatibility
-        if state in ['RUN', 'IB', 'WSU', 'UN']:  # Active states that should show as "Riding"
+        if state in ['RUN']:  # Active states that should show as "Riding"
             event_name = 'Riding'
         else:
             event_name = f'Vehicle State ({state})'
