@@ -1829,8 +1829,8 @@ class Gen2:
         if len(x) < 52:
             return cls.unhandled_entry_format(0x51, x)
 
-        # Extract vehicle state string (bytes 36-39)
-        state_bytes = x[36:40]
+        # Extract vehicle state string (bytes 35-38)
+        state_bytes = x[35:39]
         state = state_bytes.rstrip(b'\x00').decode('ascii', errors='ignore')
 
         # Decode key telemetry values using BinaryTools.unpack()
