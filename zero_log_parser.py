@@ -1960,16 +1960,22 @@ class Gen2:
 
     @classmethod
     def vehicle_state_telemetry(cls, x):
-        """Parse Type 81 (0x51) - Vehicle State Telemetry (68 bytes)
+        """Parse Type 81 (0x51) - Vehicle State Telemetry (52-68 bytes)
+
+        Real payloads come in two lengths, 64 and 68 bytes (roughly even split
+        in the corpus); the extra 4 bytes at the end of the 68-byte form are
+        never read below (highest offset used is 51), so the gate only needs
+        to guarantee that byte is present, not that both forms' trailing data
+        is. See analysis/vst_64byte_fix.md.
 
         Optimized Gen2 parser - generates structured data directly from binary.
         Returns ProcessedLogEntry with both human-readable conditions and structured JSON data.
         """
-        if len(x) < 68:
+        if len(x) < 52:
             return cls.unhandled_entry_format(0x51, x)
 
-        # Extract vehicle state string (bytes 36-39)
-        state_bytes = x[36:40]
+        # Extract vehicle state string (bytes 35-38)
+        state_bytes = x[35:39]
         state = state_bytes.rstrip(b'\x00').decode('ascii', errors='ignore')
 
         # Decode key telemetry values using BinaryTools.unpack()
@@ -2014,7 +2020,7 @@ class Gen2:
         )
 
         # Determine event name based on state - riding states show as "Riding" for plotting compatibility
-        if state in ['RUN', 'IB', 'WSU', 'UN']:  # Active states that should show as "Riding"
+        if state in ['RUN']:  # Active states that should show as "Riding"
             event_name = 'Riding'
         else:
             event_name = f'Vehicle State ({state})'
