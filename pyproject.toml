@@ -1,0 +1,119 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "zero-log-parser"
+version = "2.3.0-dev"
+description = "A modern parser for Zero Motorcycle log files with structured data extraction"
+readme = "README.md"
+license = {text = "MIT"}
+authors = [
+    {name = "Ilja Radusch", email = "ilja@radusch.com"},
+    {name = "Brian T. Rice", email = "briantrice@gmail.com"},
+    {name = "Kim Burgess"},
+    {name = "Keith Thomas"},
+]
+maintainers = [
+    {name = "Ilja Radusch", email = "ilja@radusch.com"},
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: End Users/Desktop",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: System :: Hardware",
+    "Topic :: Utilities",
+]
+keywords = ["zero", "motorcycle", "log", "parser", "mbb", "bms", "battery"]
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+plotting = [
+    "plotly>=5.0",
+    "pandas>=1.5.0",
+]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "black>=23.0",
+    "ruff>=0.1.0",
+    "mypy>=1.0",
+    "plotly>=5.0",
+    "pandas>=1.5.0",
+]
+test = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/ilja-radusch/zero-log-parser"
+Repository = "https://github.com/ilja-radusch/zero-log-parser"
+Issues = "https://github.com/ilja-radusch/zero-log-parser/issues"
+Documentation = "https://github.com/ilja-radusch/zero-log-parser/blob/main/README.md"
+
+[project.scripts]
+zero-log-parser = "zero_log_parser.cli:main"
+zlp = "zero_log_parser.cli:main"
+zero-plotting = "zero_log_parser.plot_cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+zero_log_parser = ["py.typed"]
+
+[tool.black]
+line-length = 88
+target-version = ['py310']
+include = '\.pyi?$'
+
+[tool.ruff]
+target-version = "py310"
+line-length = 88
+select = [
+    "E",  # pycodestyle errors
+    "W",  # pycodestyle warnings
+    "F",  # pyflakes
+    "I",  # isort
+    "B",  # flake8-bugbear
+    "C4", # flake8-comprehensions
+    "UP", # pyupgrade
+]
+ignore = []
+
+[tool.ruff.per-file-ignores]
+"__init__.py" = ["F401"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+warn_unreachable = true
+strict_equality = true
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+addopts = "-ra -q --strict-markers --strict-config"
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
