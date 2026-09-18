@@ -485,6 +485,50 @@ def is_vin(vin: str):
             and vin.startswith(vin_guaranteed_prefix))
 
 
+vin_valid_prefixes = ('538', 'PAG')
+vin_charset_re = re.compile(r'^[A-HJ-NPR-Z0-9]{17}$')
+# FMVSS 565 / SAE J853 position-9 check digit: weights per position, and
+# A-Z -> 1-9 transliteration skipping I/O/Q (never appear in a real VIN,
+# reserved to avoid confusion with 1/0).
+_vin_check_digit_weights = [8, 7, 6, 5, 4, 3, 2, 10, 0, 9, 8, 7, 6, 5, 4, 3, 2]
+_vin_transliteration = {}
+for _i, _c in enumerate('ABCDEFGH'):
+    _vin_transliteration[_c] = _i + 1
+for _i, _c in enumerate('JKLMN'):
+    _vin_transliteration[_c] = _i + 1
+_vin_transliteration['P'] = 7
+_vin_transliteration['R'] = 9
+for _i, _c in enumerate('STUVWXYZ'):
+    _vin_transliteration[_c] = _i + 2
+for _d in '0123456789':
+    _vin_transliteration[_d] = int(_d)
+
+
+def is_valid_vin_checksum(vin: str) -> bool:
+    """Full VIN validation: 17-char charset (excludes I/O/Q), a recognized
+    Zero WMI prefix (538 or PAG), and a correct FMVSS 565 check digit at
+    position 9. Stricter than is_vin() above, which only checks shape -
+    used where a false positive would misroute or mislabel a file rather
+    than just fail to find one (e.g. distinguishing a genuine Gen3 header
+    VIN at a specific byte offset from coincidentally VIN-shaped bytes).
+    See analysis/atomicdog_gen3_test.md and analysis/vin_checkdigit.md."""
+    if not vin or len(vin) != vin_length:
+        return False
+    vin = vin.upper()
+    if not vin_charset_re.match(vin):
+        return False
+    if not vin.startswith(vin_valid_prefixes):
+        return False
+    try:
+        total = sum(_vin_transliteration[c] * w
+                    for c, w in zip(vin, _vin_check_digit_weights))
+    except KeyError:
+        return False
+    remainder = total % 11
+    check_digit = 'X' if remainder == 10 else str(remainder)
+    return check_digit == vin[8]
+
+
 # noinspection PyMissingOrEmptyDocstring
 class LogFile:
     """
@@ -2756,8 +2800,38 @@ class LogData(object):
                                          and not _legacy_vin_present()):
                 # Ring buffer format detected
                 log_version = REV3  # New revision for ring buffer format
-                filename_vin = self.log_file.get_filename_vin()
-                sys_info['VIN'] = filename_vin if filename_vin else 'Unknown'
+
+                # Gen3 header fields: offsets from PR #17 (AtomicDog),
+                # confirmed against 418 real Gen3/FST files in
+                # analysis/atomicdog_gen3_test.md. VIN sits at 0x29 in 97%
+                # of files and one byte later, at 0x2A, in a further 2.6%
+                # - that report found no clean formula predicting which, so
+                # both are tried in offset order rather than trusting one.
+                # Model/Board id/Firmware rev./Firmware build all shift by
+                # the same amount as VIN when it shifts (confirmed directly
+                # for this implementation, not assumed - see
+                # analysis/gen3_header_decode.md Task 0). Falls back to the
+                # filename VIN exactly as before if neither offset
+                # validates, so the one known file with no recoverable
+                # header VIN at all (a 644-byte malformed capture) is
+                # unaffected.
+                gen3_vin = None
+                gen3_vin_offset = None
+                for candidate_offset in (0x29, 0x2A):
+                    try:
+                        candidate = log.unpack_str(candidate_offset, count=17)
+                    except Exception:
+                        continue
+                    if is_valid_vin_checksum(candidate):
+                        gen3_vin = candidate.upper()
+                        gen3_vin_offset = candidate_offset
+                        break
+
+                if gen3_vin:
+                    sys_info['VIN'] = gen3_vin
+                else:
+                    filename_vin = self.log_file.get_filename_vin()
+                    sys_info['VIN'] = filename_vin if filename_vin else 'Unknown'
 
                 # Look for serial number - it's located 0x302 bytes after first run date header
                 serial_found = False
@@ -2799,9 +2873,47 @@ class LogData(object):
                 else:
                     sys_info['Initial date'] = 'Unknown'
 
-                sys_info['Model'] = 'Unknown'  # Model not found in ring buffer format
-                sys_info['Firmware rev.'] = 'Unknown'
-                sys_info['Board rev.'] = 'Unknown'
+                # Model/Board id/Firmware rev./Firmware build: only readable
+                # once a validating Gen3 VIN offset pins down which of the
+                # two known byte-shifts this file uses (see above). Each
+                # field degrades to 'Unknown' independently on its own read
+                # failure or implausible content, rather than one bad field
+                # taking the others down with it - a short/truncated file
+                # can validate a VIN yet still be too short for a later
+                # field to be in bounds.
+                if gen3_vin_offset is not None:
+                    shift = gen3_vin_offset - 0x29
+
+                    try:
+                        model = log.unpack_str(0x19 + shift, count=16).strip('\x00')
+                        sys_info['Model'] = model if model and BinaryTools.is_printable(model) else 'Unknown'
+                    except Exception:
+                        sys_info['Model'] = 'Unknown'
+
+                    try:
+                        sys_info['Board rev.'] = log.unpack('uint8', 0x65 + shift)
+                    except Exception:
+                        sys_info['Board rev.'] = 'Unknown'
+
+                    try:
+                        sys_info['Firmware rev.'] = log.unpack('uint8', 0x67 + shift)
+                    except Exception:
+                        sys_info['Firmware rev.'] = 'Unknown'
+
+                    try:
+                        fw_build = log.unpack_str(0x6B + shift, count=32).strip('\x00')
+                        sys_info['Firmware build'] = fw_build if fw_build and BinaryTools.is_printable(fw_build) else 'Unknown'
+                    except Exception:
+                        sys_info['Firmware build'] = 'Unknown'
+                else:
+                    # No validating VIN offset found (filename fallback case
+                    # above) - none of these are safe to read at either
+                    # candidate shift, so all four stay 'Unknown', matching
+                    # this branch's behavior before this offsets were added.
+                    sys_info['Model'] = 'Unknown'
+                    sys_info['Firmware rev.'] = 'Unknown'
+                    sys_info['Board rev.'] = 'Unknown'
+                    sys_info['Firmware build'] = 'Unknown'
 
             else:
                 # Legacy format - use original logic
