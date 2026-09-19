@@ -76,59 +76,68 @@ Address    | Length | Contents
 
 *Note: Addresses may vary between files. Section headers should be located by scanning for the 4-byte sequences.*
 
-## Compressed Telemetry Format Layout (2025+ firmware)
-
-The 2025+ firmware introduces a significantly different log structure optimized for telemetry collection:
+## FST Platform Format Layout
 
 ### Key Changes from Ring Buffer Format:
-- **File Size**: 131,200 bytes (exactly 50% of ring buffer format)
-- **Structure**: Linear entry dump without section headers
-- **Data Focus**: Structured JSON telemetry vs human-readable diagnostic text
+- **File Size**: 131,200 bytes (MBB) or 131,328 bytes (BMS), both page-aligned to 128 bytes
+- **Structure**: `0xFB` log-header entry at offset 0, then log entries
+- **Data Focus**: Structured binary telemetry vs human-readable diagnostic text
 - **Message Density**: ~2,200 entries vs ~6,600 in ring buffer format
-- **Encoding**: Binary/hex abbreviated patterns vs full text descriptions
+- **Encoding**: Little-endian structs with `0xFE` byte-stuffing
+
+### Entry framing and where sizes are measured
+
+Every entry has a fixed 13-byte header, followed by the payload:
+
+Offset | Length | Contents
+------ | :----: | --------
+0x00   | 1      | `0xb2` entry start
+0x01   | 1      | Entry length on disk, including the header and any escape bytes (max 128)
+0x02   | 1      | Entry type
+0x03   | 4      | Timestamp, seconds since the Unix epoch (u32le)
+0x07   | 4      | Microseconds (u32le).
+0x0b   | 1      | Rolling entry counter (u8)
+0x0c   | 1      | UTC offset in hours (s8), from the bike's time-correction setting
+0x0d   | *variable* | Payload
+
+The UTC offset: `0xF9` (-7) and `0xF8` (-8) are, for example, US Pacific daylight and standard
+time, and `0x01`/`0x02` are UTC+1/UTC+2.
+
+From the type byte onwards, each `0xB2` or `0xFE` is written as `0xFE` followed by the byte's
+complement (`0xB2` becomes `fe 4d`, `0xFE` becomes `fe 01`), and the length byte counts the
+escaped size.
 
 ### Message Type Evolution:
-The 2025+ format replaces verbose diagnostic messages with structured telemetry:
+The FST platform format replaces verbose diagnostic messages with structured telemetry:
 
 **Ring Buffer Format (2024):**
 - 1,754× "Riding" entries with full vehicle state text
 - 264× "Module XX Opening Contactor" descriptive messages
 - 156× "Sevcon CAN Link Up" verbose diagnostics
 
-**Compressed Format (2025+):**
-- 151× Vehicle State Telemetry (Type 81) with JSON data
-- 152× Sensor Data (Type 84) with structured readings
-- 45× Abbreviated hex patterns (e.g., "0x2c 0x01", "0x28 0x02")
+**FST Platform Format:**
+- 151× telemetry snapshots (0x51)
+- 152× motor/power snapshots (0x54)
 
-### Abbreviated Message Patterns:
-The new format uses compressed hex identifiers instead of full text:
+### Vehicle State Machine (from 0x51 `state` field)
 
-Pattern | Count | Meaning | 2024 Equivalent
---------|-------|---------|----------------
-`0x28 0x02` | 52× | Battery CAN Link Up, Module 02 | "Module 02 CAN Link Up"
-`0x01` | 124× | Board Status (abbreviated) | "Board Status"
-`0x2c 0x01` | 45× | Riding Status (compressed) | "Riding" (full telemetry)
-`0x7a 0x01` | 44× | Unknown MBB Type 122 | (New in 2025+)
-`0x58 0x15 0x01` | 35× | Unknown complex pattern | (New in 2025+)
+The `state` field is a 5-byte null-padded ASCII string at **payload offset 29**.
 
-### Vehicle State Machine (from Type 81 analysis):
-
-State | Full Name | Odometer Behavior | Interpretation
-------|-----------|-------------------|---------------
-`WSU` | Wakeup/Startup | Large drops (-51 to -83km avg) | Trip odometer reset/different source
-`IB` | In-motion/Battery active | Increases (+46-48km avg) | Normal riding operation
-`UN` | Unknown/Neutral/Idle | Small changes (-3 to +2km) | Parked/idle state
-`TOP` | Trip completion/Peak | Large increases (+101-247km) | End-of-trip summary/total odometer
-`AIT` | Auto/Initialization/Timer | Mixed large changes | System initialization events
-`AKE` | Awake/Active | Very large drops (-423km avg) | Major system reset
-`HRG` | Charging/High-voltage | Mixed, includes large drops | Charging mode
-`EV` | Electric Vehicle mode | Large drop (-142km) | Explicit EV operation mode
-`RUN` | Running | Normal progression | Active vehicle operation  
-`STOP` | Stopped | Normal progression | Vehicle stopped
-`STRT` | Starting | Normal progression | Vehicle startup sequence
-`PWSU` | Power Supply/Startup | Normal progression | Power system initialization
-
-**Key Insight**: The "odometer inconsistencies" are actually multiple concurrent odometer sources (trip, session, total) being switched based on vehicle state. This is normal behavior, not data corruption.
+Index | State  | Meaning (inferred from the name)
+----- | ------ | --------------------------------
+0     | `NONE` | No state
+1     | `STRT` | Starting up
+2     | `PWSU` | Power supply up
+3     | `WAKE` | Waking from hibernate
+4     | `HIB`  | Hibernating
+5     | `STOP` | Stopped / shutting down
+6     | `RUN`  | Riding
+7     | `LIMP` | Limp mode
+8     | `CHRG` | Charging
+9     | `WAIT` | Waiting (parked, key off)
+10    | `FWUP` | Firmware update
+11    | `REV`  | Reverse
+12    | `PARK` | Park mode
 
 ## Log sections (located by header sequence)
 
@@ -673,12 +682,10 @@ Offset | Length     | Contents
 
 ### Parser Implementation Guidelines:
 
-**For 2025+ Compressed Format:**
-- Handle abbreviated hex patterns as valid message types
-- Implement JSON decoders for Type 81/84 structured data
-- Parse Type 251 for system identification
-- Process compressed message identifiers (0x28 0x02, etc.)
-- Expect lower entry count but higher data density
+**For the FST Platform Format:**
+- Un-stuff `0xFE` escapes before applying any offset. The header is always 13 bytes after
+  un-stuffing; on raw bytes, every escape before a field shifts it by one
+- Read byte `0x0c` as the UTC offset in hours rather than matching it against fixed values
 
 **For 2024 Ring Buffer Format:**
 - Parse verbose diagnostic messages
