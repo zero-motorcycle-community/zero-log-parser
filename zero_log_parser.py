@@ -1665,6 +1665,87 @@ class Gen2:
             'structured_data': structured_data
         }
 
+    # No entry of any type in the FST/Gen3 file set carries a sub-second value
+    # above this (the maximum seen is exactly 1,000,000), so a decoder that
+    # sees more is not looking at an FST entry. Two legacy BMS files hold a
+    # 24-byte ASCII text entry of type 0x4F that passes every other check.
+    FST_SUBSECOND_MAX_US = 1000000
+
+    @classmethod
+    def fst_entry_prefix(cls, x):
+        """The 6-byte prefix at the start of every FST/Gen3 MBB entry payload
+        that this parser decodes structurally (types 0x48, 0x4B-0x4D, 0x4F).
+        Bytes 0-3 are a little-endian u32 in the range 0-1,000,000 that is
+        almost always a multiple of 1000, and are read as the sub-second part
+        of the entry's timestamp, in microseconds: sorted by the entry's own
+        4-byte seconds field alone this value looks non-monotonic, but taken
+        together with it (seconds * 1e6 + this value) it is monotonic in walk
+        order except at the ring-buffer wrap point. It is NOT an odometer,
+        despite matching odometer_m's scale. See analysis/fst_part1_decoders.md.
+
+        Byte 4 is a per-entry sequence counter (mod 256): in the FST/Gen3
+        file set it increases by exactly 1 between 97.3% of adjacent entries
+        in walk order (804,148 of 826,535 pairs), for entries of every type,
+        not only the ones decoded here. Byte 5 is a marker byte of
+        unidentified meaning (mostly 0xf9, 0x02, 0xfc, 0xfb, 0x01).
+        """
+        return {
+            'subsecond_us': BinaryTools.unpack('uint32', x, 0x0),
+            'sequence': BinaryTools.unpack('uint8', x, 0x4),
+            'marker': BinaryTools.unpack('uint8', x, 0x5),
+        }
+
+    # Entry types 0x4B/0x4C/0x4D: one record family, three sizes. A telemetry
+    # sub-block widens by exactly 4 bytes per tier, and a 4-byte null-padded
+    # ASCII state tag sits at a fixed offset relative to the end of that
+    # block. Layout and evidence: analysis/atomicdog_family_decode.md;
+    # full-population confirmation: analysis/fst_part1_decoders.md.
+    # message_type -> (tier name, exact payload length, state tag offset)
+    STATE_SNAPSHOT_TIERS = {
+        0x4b: ('small', 46, 35),
+        0x4c: ('medium', 77, 39),
+        0x4d: ('large', 89, 43),
+    }
+    STATE_SNAPSHOT_TAGS = frozenset(
+        ['RUN', 'PWSU', 'CHRG', 'WAIT', 'STOP', 'HIB', 'WAKE', 'FWUP', 'STRT'])
+
+    @classmethod
+    def state_snapshot(cls, message_type, x):
+        """Types 0x4B/0x4C/0x4D - state-tagged snapshot (46/77/89 bytes).
+
+        Decodes only what was confirmed: the tier (implied by the type), the
+        state tag, and the shared 6-byte prefix. Every other byte is
+        unidentified and is kept as-is in raw_hex rather than guessed at.
+        Anything that is not exactly the expected length, or whose tag is
+        not one of the nine known values, falls back to the raw-hex report
+        unhandled_entry_format() already gives these types.
+        """
+        tier, length, tag_offset = cls.STATE_SNAPSHOT_TIERS[message_type]
+        if len(x) != length:
+            return cls.unhandled_entry_format(message_type, x)
+
+        tag_bytes = bytes(x[tag_offset:tag_offset + 4])
+        state = tag_bytes.rstrip(b'\x00').decode('ascii', errors='replace')
+        if state not in cls.STATE_SNAPSHOT_TAGS or tag_bytes != state.encode('ascii').ljust(4, b'\x00'):
+            return cls.unhandled_entry_format(message_type, x)
+
+        prefix = cls.fst_entry_prefix(x)
+        if prefix['subsecond_us'] > cls.FST_SUBSECOND_MAX_US:
+            return cls.unhandled_entry_format(message_type, x)
+
+        structured_data = {
+            'snapshot_tier': tier,
+            'state': state,
+        }
+        structured_data.update(prefix)
+        structured_data['raw_hex'] = bytes(x).hex()
+
+        return {
+            'event': 'State Snapshot',
+            'conditions': f'State: {state}, tier: {tier}',
+            'structured_data': structured_data
+        }
+
     @classmethod
     def battery_status(cls, x):
         opening_contactor = 'Opening Contractor'
@@ -2265,6 +2346,9 @@ class Gen2:
             0x3b: cls.precharge_decay_too_steep,
             0x3c: cls.disarmed_status,
             0x3d: cls.battery_contactor_closed,
+            0x4b: lambda m: cls.state_snapshot(0x4b, m),  # Type 75
+            0x4c: lambda m: cls.state_snapshot(0x4c, m),  # Type 76
+            0x4d: lambda m: cls.state_snapshot(0x4d, m),  # Type 77
             0x51: cls.vehicle_state_telemetry,  # Type 81
             0x54: cls.sensor_data,              # Type 84
             0xfd: cls.debug_message
