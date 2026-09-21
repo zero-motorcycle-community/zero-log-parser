@@ -1677,6 +1677,12 @@ class Gen2:
     # 24-byte ASCII text entry of type 0x4F that passes every other check.
     FST_SUBSECOND_MAX_US = 1000000
 
+    # No entry of any type in the FST/Gen3 file set carries a sub-second value
+    # above this (the maximum seen is exactly 1,000,000), so a decoder that
+    # sees more is not looking at an FST entry. Two legacy BMS files hold a
+    # 24-byte ASCII text entry of type 0x4F that passes every other check.
+    FST_SUBSECOND_MAX_US = 1000000
+
     @classmethod
     def fst_entry_prefix(cls, x):
         """The 6-byte prefix at the start of every FST/Gen3 MBB entry payload
@@ -1740,6 +1746,10 @@ class Gen2:
         if prefix['subsecond_us'] > cls.FST_SUBSECOND_MAX_US:
             return cls.unhandled_entry_format(0x48, x)
 
+        prefix = cls.fst_entry_prefix(x)
+        if prefix['subsecond_us'] > cls.FST_SUBSECOND_MAX_US:
+            return cls.unhandled_entry_format(0x48, x)
+
         chargers = []
         for index in range(record_bytes // cls.CHARGER_RECORD_LEN):
             start = cls.CHARGER_RECORD_OFFSET + index * cls.CHARGER_RECORD_LEN
@@ -1773,6 +1783,50 @@ class Gen2:
         return {
             'event': 'Charger Info',
             'conditions': conditions,
+            'structured_data': structured_data
+        }
+
+    @classmethod
+    def queue_full(cls, x):
+        """Type 0x4F - FreeRTOS queue-full report (24 bytes): the shared
+        6-byte prefix, a 10-byte NUL-padded ASCII queue name, then two
+        little-endian u32 values.
+
+        Eleven queue names occur in the FST/Gen3 file set (CAN1txQ, CAN2txQ,
+        logQ, CAN1RxQ, CAN0RxQ, uarttxQ, dashQ, uartrxQ, pduQ, CAN2RxQ,
+        lssQ); the name is not restricted to that list. The first u32 is a
+        near-constant per queue name (8 for logQ, 6 for dashQ, 16 for CAN2txQ
+        and so on, with a few exceptions), which reads like the queue's
+        capacity; the second varies from 1 to 20,283 and is not monotonic.
+        Neither is confirmed, so both are exposed under neutral names.
+        See analysis/issue16_entry_types.md and analysis/fst_part1_decoders.md.
+
+        Any payload that is not exactly 24 bytes, or whose name field is not
+        NUL-padded printable ASCII, or whose sub-second value is above
+        FST_SUBSECOND_MAX_US, falls back to the raw-hex report
+        unhandled_entry_format() already gives this type.
+        """
+        if len(x) != 24:
+            return cls.unhandled_entry_format(0x4f, x)
+
+        name_text = bytes(x[6:16]).rstrip(b'\x00')
+        if not name_text or not all(32 <= c < 127 for c in name_text):
+            return cls.unhandled_entry_format(0x4f, x)
+        queue_name = name_text.decode('ascii')
+
+        prefix = cls.fst_entry_prefix(x)
+        if prefix['subsecond_us'] > cls.FST_SUBSECOND_MAX_US:
+            return cls.unhandled_entry_format(0x4f, x)
+
+        structured_data = dict(prefix)
+        structured_data['queue_name'] = queue_name
+        structured_data['value_a'] = BinaryTools.unpack('uint32', x, 16)
+        structured_data['value_b'] = BinaryTools.unpack('uint32', x, 20)
+
+        return {
+            'event': 'Queue Full',
+            'conditions': (f"Queue {queue_name}: a={structured_data['value_a']}, "
+                           f"b={structured_data['value_b']}"),
             'structured_data': structured_data
         }
 
@@ -2431,6 +2485,7 @@ class Gen2:
             0x4b: lambda m: cls.state_snapshot(0x4b, m),  # Type 75
             0x4c: lambda m: cls.state_snapshot(0x4c, m),  # Type 76
             0x4d: lambda m: cls.state_snapshot(0x4d, m),  # Type 77
+            0x4f: cls.queue_full,               # Type 79
             0x51: cls.vehicle_state_telemetry,  # Type 81
             0x54: cls.sensor_data,              # Type 84
             0xfd: cls.debug_message
