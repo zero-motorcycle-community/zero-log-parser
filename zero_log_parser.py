@@ -1671,6 +1671,12 @@ class Gen2:
     # 24-byte ASCII text entry of type 0x4F that passes every other check.
     FST_SUBSECOND_MAX_US = 1000000
 
+    # No entry of any type in the FST/Gen3 file set carries a sub-second value
+    # above this (the maximum seen is exactly 1,000,000), so a decoder that
+    # sees more is not looking at an FST entry. Two legacy BMS files hold a
+    # 24-byte ASCII text entry of type 0x4F that passes every other check.
+    FST_SUBSECOND_MAX_US = 1000000
+
     @classmethod
     def fst_entry_prefix(cls, x):
         """The 6-byte prefix at the start of every FST/Gen3 MBB entry payload
@@ -1693,6 +1699,81 @@ class Gen2:
             'subsecond_us': BinaryTools.unpack('uint32', x, 0x0),
             'sequence': BinaryTools.unpack('uint8', x, 0x4),
             'marker': BinaryTools.unpack('uint8', x, 0x5),
+        }
+
+    # Entry type 0x48: charger table. A 6-byte prefix (see fst_entry_prefix)
+    # followed by one 49-byte record per charger unit. Payloads are 55 bytes
+    # (one charger) or 104 bytes (two: the second is the first's layout again,
+    # not a different structure). Each record, offsets relative to its start:
+    #   0-9   name, 10 bytes, ASCII, NUL padded (5 values seen, see below)
+    #  10-11  flags, 2 bytes (first byte is 0x80 or 0x20 in 95.7% of records)
+    #  12-28  17-byte measurement block, undecoded
+    #  29     hertz (0, or 47-63 in all but 14 of 10,104 records)
+    #  30     unidentified byte
+    #  31     id (0x10, 0x11, 0x12)
+    #  32-33  version, u16 LE
+    #  34-37  serial number, u32 LE
+    #  38-48  11-byte trailer, undecoded
+    # Evidence and full-population validation: analysis/fst_part1_decoders.md.
+    CHARGER_RECORD_OFFSET = 6
+    CHARGER_RECORD_LEN = 49
+
+    @classmethod
+    def charger_info(cls, x):
+        """Type 0x48 - charger table (55 or 104 bytes: one or two 49-byte
+        charger records after the shared 6-byte prefix).
+
+        The name, flags, hertz, id, version and serial number are decoded.
+        The 17-byte measurement block, the single unidentified byte and the
+        11-byte trailer are kept, undecoded, in each record's raw_hex.
+
+        A payload whose length is not the prefix plus a whole number of
+        records, or whose name field is not NUL-padded printable ASCII,
+        falls back to the raw-hex report unhandled_entry_format() already
+        gives this type.
+        """
+        record_bytes = len(x) - cls.CHARGER_RECORD_OFFSET
+        if record_bytes < cls.CHARGER_RECORD_LEN or record_bytes % cls.CHARGER_RECORD_LEN:
+            return cls.unhandled_entry_format(0x48, x)
+
+        prefix = cls.fst_entry_prefix(x)
+        if prefix['subsecond_us'] > cls.FST_SUBSECOND_MAX_US:
+            return cls.unhandled_entry_format(0x48, x)
+
+        chargers = []
+        for index in range(record_bytes // cls.CHARGER_RECORD_LEN):
+            start = cls.CHARGER_RECORD_OFFSET + index * cls.CHARGER_RECORD_LEN
+            record = x[start:start + cls.CHARGER_RECORD_LEN]
+
+            name_field = bytes(record[0:10])
+            name_text = name_field.rstrip(b'\x00')
+            if not name_text or not all(32 <= c < 127 for c in name_text):
+                return cls.unhandled_entry_format(0x48, x)
+
+            chargers.append({
+                'name': name_text.decode('ascii').strip(),
+                'flags': BinaryTools.unpack('uint16', record, 10),
+                'hertz': BinaryTools.unpack('uint8', record, 29),
+                'id': BinaryTools.unpack('uint8', record, 31),
+                'version': BinaryTools.unpack('uint16', record, 32),
+                'serial_number': BinaryTools.unpack('uint32', record, 34),
+                'raw_hex': bytes(record).hex(),
+            })
+
+        structured_data = dict(prefix)
+        structured_data['charger_count'] = len(chargers)
+        structured_data['chargers'] = chargers
+
+        conditions = '; '.join(
+            f"{c['name']} id {c['id']}, serial {c['serial_number']}, "
+            f"version {c['version']}, {c['hertz']} Hz"
+            for c in chargers
+        )
+
+        return {
+            'event': 'Charger Info',
+            'conditions': conditions,
+            'structured_data': structured_data
         }
 
     # Entry types 0x4B/0x4C/0x4D: one record family, three sizes. A telemetry
@@ -2346,6 +2427,7 @@ class Gen2:
             0x3b: cls.precharge_decay_too_steep,
             0x3c: cls.disarmed_status,
             0x3d: cls.battery_contactor_closed,
+            0x48: cls.charger_info,             # Type 72
             0x4b: lambda m: cls.state_snapshot(0x4b, m),  # Type 75
             0x4c: lambda m: cls.state_snapshot(0x4c, m),  # Type 76
             0x4d: lambda m: cls.state_snapshot(0x4d, m),  # Type 77
