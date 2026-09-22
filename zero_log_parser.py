@@ -681,6 +681,40 @@ def print_value_tabular(value, omit_units=False):
 
 
 class Gen2:
+    # Standing convention for how undecoded or destroyed bytes render, used by
+    # every decoder that carries a raw_hex field or a corrupted span (state
+    # snapshot, charger info, vehicle state telemetry tiers, and the
+    # page-aware BMS walker). Two distinct cases:
+    #
+    # - Undecoded: bytes a decoder never attempted to interpret. Kept as a
+    #   structured_data['raw_hex'] hex string (unchanged, still the real,
+    #   machine-readable field JSON/CSV output sees); text output renders it
+    #   as a bracketed hex dump via undecoded_hex_display().
+    # - Corrupted: bytes destroyed by the FST/Gen3 BMS page marker
+    #   (analysis/pattern_00f0ff00_entries_and_ecuid_outliers.md) - there is
+    #   nothing to hex-dump. mark_bytes_corrupted() sets two real fields,
+    #   structured_data['bytes_corrupted'] and ['corrupted_byte_count']; text
+    #   output renders them as a distinct tag via corrupted_span_display().
+    #
+    # Both tags are produced centrally by the txt emitter's
+    # format_structured_data() (LogData.emit_zero_compatible_decoding), which
+    # every decoder using these fields relies on rather than formatting its
+    # own text. This is a text-output/structured_data convention only - it
+    # does not touch emit_json_decoding, which already renders structured_data
+    # verbatim.
+    @staticmethod
+    def undecoded_hex_display(raw_bytes) -> str:
+        return '{undecoded hex: %s}' % ' '.join('%02x' % b for b in raw_bytes)
+
+    @staticmethod
+    def corrupted_span_display(byte_count: int) -> str:
+        return '{corrupted: %d bytes lost}' % byte_count
+
+    @staticmethod
+    def mark_bytes_corrupted(structured_data: dict, byte_count: int) -> None:
+        structured_data['bytes_corrupted'] = True
+        structured_data['corrupted_byte_count'] = byte_count
+
     @classmethod
     def timestamp_from_event(cls, unescaped_block, use_local_time=True, timezone_offset=None):
         timestamp = BinaryTools.unpack('uint32', unescaped_block, 0x01)
@@ -3568,36 +3602,75 @@ class LogData(object):
             unknown_entries = 0
             unknown = []
 
+            def format_structured_value(key, value):
+                """Format one structured_data value for text output. Shared
+                by format_structured_data below and by its own recursion into
+                a list of nested dicts (e.g. charger_info's 'chargers'), so
+                the raw_hex/corrupted-span convention applies at any depth
+                without each decoder reimplementing it."""
+                # The raw_hex key is this repo's one, newly-introduced name
+                # for "bytes a decoder never attempted to interpret" (see
+                # Gen2's undecoded_hex_display/mark_bytes_corrupted docstring
+                # comment); matched by exact key name only; the older,
+                # unrelated build_info_suffix_raw_hex field predates this
+                # convention and is deliberately left alone.
+                if key == 'raw_hex':
+                    return Gen2.undecoded_hex_display(bytes.fromhex(value))
+                if isinstance(value, list) and value and all(isinstance(v, dict) for v in value):
+                    return '[' + '; '.join(format_structured_data(v) for v in value) + ']'
+                if isinstance(value, str):
+                    return value
+                # Every check below is an unchanged substring match from the
+                # original version of this function, preserved as-is,
+                # including its pre-existing false-positive matches (e.g.
+                # 'max_current_amps' or 'voltage_max' read 'ma' out of "max"
+                # and render as milliamps on production today; not this
+                # task's bug to fix, left alone so this change touches
+                # nothing it wasn't asked to). The one exception is the
+                # literal key 'marker', a new field introduced by the FST
+                # decoders (Gen2.fst_entry_prefix) that the same 'ma'
+                # substring would otherwise also catch.
+                key_lower = key.lower()
+                if 'percent' in key_lower:
+                    return f"{value}%"
+                elif key != 'marker' and 'ma' in key_lower:  # Check mA before amps to avoid conflict
+                    return f"{value}mA"
+                elif 'amps' in key_lower or 'current' in key_lower:
+                    return f"{value}A"
+                elif 'mv' in key_lower:
+                    return f"{value}mV"
+                elif 'volts' in key_lower or 'voltage' in key_lower:
+                    return f"{value}V"
+                elif 'celsius' in key_lower or 'temp' in key_lower:
+                    return f"{value}°C"
+                else:
+                    return str(value)
+
             def format_structured_data(structured_data):
-                """Format structured data as readable key-value pairs"""
+                """Format structured data as readable key-value pairs. A
+                raw_hex field renders as a bracketed undecoded-hex tag with
+                no separate label; bytes_corrupted/corrupted_byte_count
+                (Gen2.mark_bytes_corrupted's real, machine-readable fields)
+                collapse into one bracketed corruption tag instead of two
+                key-value pairs. See Gen2's standing-convention comment above
+                its undecoded_hex_display/corrupted_span_display/
+                mark_bytes_corrupted definitions."""
                 if not structured_data:
                     return ""
 
-                # Create readable key-value pairs
                 formatted_pairs = []
                 for key, value in structured_data.items():
-                    # Convert snake_case to readable format
+                    if key in ('bytes_corrupted', 'corrupted_byte_count'):
+                        continue
+                    if key == 'raw_hex':
+                        formatted_pairs.append(format_structured_value(key, value))
+                        continue
                     readable_key = key.replace('_', ' ').title()
+                    formatted_pairs.append(f"{readable_key}: {format_structured_value(key, value)}")
 
-                    # Format value based on type and key patterns
-                    if isinstance(value, str):
-                        formatted_value = value
-                    elif 'percent' in key.lower():
-                        formatted_value = f"{value}%"
-                    elif 'ma' in key.lower():  # Check mA before amps to avoid conflict
-                        formatted_value = f"{value}mA"
-                    elif 'amps' in key.lower() or 'current' in key.lower():
-                        formatted_value = f"{value}A"
-                    elif 'mv' in key.lower():
-                        formatted_value = f"{value}mV"
-                    elif 'volts' in key.lower() or 'voltage' in key.lower():
-                        formatted_value = f"{value}V"
-                    elif 'celsius' in key.lower() or 'temp' in key.lower():
-                        formatted_value = f"{value}°C"
-                    else:
-                        formatted_value = str(value)
-
-                    formatted_pairs.append(f"{readable_key}: {formatted_value}")
+                if structured_data.get('bytes_corrupted'):
+                    formatted_pairs.append(
+                        Gen2.corrupted_span_display(structured_data.get('corrupted_byte_count', 0)))
 
                 return ", ".join(formatted_pairs)
 
