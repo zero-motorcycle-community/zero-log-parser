@@ -681,6 +681,40 @@ def print_value_tabular(value, omit_units=False):
 
 
 class Gen2:
+    # Standing convention for how undecoded or destroyed bytes render, used by
+    # every decoder that carries a raw_hex field or a corrupted span (state
+    # snapshot, charger info, vehicle state telemetry tiers, and the
+    # page-aware BMS walker). Two distinct cases:
+    #
+    # - Undecoded: bytes a decoder never attempted to interpret. Kept as a
+    #   structured_data['raw_hex'] hex string (unchanged, still the real,
+    #   machine-readable field JSON/CSV output sees); text output renders it
+    #   as a bracketed hex dump via undecoded_hex_display().
+    # - Corrupted: bytes destroyed by the FST/Gen3 BMS page marker
+    #   (analysis/pattern_00f0ff00_entries_and_ecuid_outliers.md) - there is
+    #   nothing to hex-dump. mark_bytes_corrupted() sets two real fields,
+    #   structured_data['bytes_corrupted'] and ['corrupted_byte_count']; text
+    #   output renders them as a distinct tag via corrupted_span_display().
+    #
+    # Both tags are produced centrally by the txt emitter's
+    # format_structured_data() (LogData.emit_zero_compatible_decoding), which
+    # every decoder using these fields relies on rather than formatting its
+    # own text. This is a text-output/structured_data convention only - it
+    # does not touch emit_json_decoding, which already renders structured_data
+    # verbatim.
+    @staticmethod
+    def undecoded_hex_display(raw_bytes) -> str:
+        return '{undecoded hex: %s}' % ' '.join('%02x' % b for b in raw_bytes)
+
+    @staticmethod
+    def corrupted_span_display(byte_count: int) -> str:
+        return '{corrupted: %d bytes lost}' % byte_count
+
+    @staticmethod
+    def mark_bytes_corrupted(structured_data: dict, byte_count: int) -> None:
+        structured_data['bytes_corrupted'] = True
+        structured_data['corrupted_byte_count'] = byte_count
+
     @classmethod
     def timestamp_from_event(cls, unescaped_block, use_local_time=True, timezone_offset=None):
         timestamp = BinaryTools.unpack('uint32', unescaped_block, 0x01)
@@ -1665,6 +1699,222 @@ class Gen2:
             'structured_data': structured_data
         }
 
+    # No entry of any type in the FST/Gen3 file set carries a sub-second value
+    # above this (the maximum seen is exactly 1,000,000), so a decoder that
+    # sees more is not looking at an FST entry. Two legacy BMS files hold a
+    # 24-byte ASCII text entry of type 0x4F that passes every other check.
+    FST_SUBSECOND_MAX_US = 1000000
+
+    # No entry of any type in the FST/Gen3 file set carries a sub-second value
+    # above this (the maximum seen is exactly 1,000,000), so a decoder that
+    # sees more is not looking at an FST entry. Two legacy BMS files hold a
+    # 24-byte ASCII text entry of type 0x4F that passes every other check.
+    FST_SUBSECOND_MAX_US = 1000000
+
+    # No entry of any type in the FST/Gen3 file set carries a sub-second value
+    # above this (the maximum seen is exactly 1,000,000), so a decoder that
+    # sees more is not looking at an FST entry. Two legacy BMS files hold a
+    # 24-byte ASCII text entry of type 0x4F that passes every other check.
+    FST_SUBSECOND_MAX_US = 1000000
+
+    @classmethod
+    def fst_entry_prefix(cls, x):
+        """The 6-byte prefix at the start of every FST/Gen3 MBB entry payload
+        that this parser decodes structurally (types 0x48, 0x4B-0x4D, 0x4F).
+        Bytes 0-3 are a little-endian u32 in the range 0-1,000,000 that is
+        almost always a multiple of 1000, and are read as the sub-second part
+        of the entry's timestamp, in microseconds: sorted by the entry's own
+        4-byte seconds field alone this value looks non-monotonic, but taken
+        together with it (seconds * 1e6 + this value) it is monotonic in walk
+        order except at the ring-buffer wrap point. It is NOT an odometer,
+        despite matching odometer_m's scale. See analysis/fst_part1_decoders.md.
+
+        Byte 4 is a per-entry sequence counter (mod 256): in the FST/Gen3
+        file set it increases by exactly 1 between 97.3% of adjacent entries
+        in walk order (804,148 of 826,535 pairs), for entries of every type,
+        not only the ones decoded here. Byte 5 is a marker byte of
+        unidentified meaning (mostly 0xf9, 0x02, 0xfc, 0xfb, 0x01).
+        """
+        return {
+            'subsecond_us': BinaryTools.unpack('uint32', x, 0x0),
+            'sequence': BinaryTools.unpack('uint8', x, 0x4),
+            'marker': BinaryTools.unpack('uint8', x, 0x5),
+        }
+
+    # Entry type 0x48: charger table. A 6-byte prefix (see fst_entry_prefix)
+    # followed by one 49-byte record per charger unit. Payloads are 55 bytes
+    # (one charger) or 104 bytes (two: the second is the first's layout again,
+    # not a different structure). Each record, offsets relative to its start:
+    #   0-9   name, 10 bytes, ASCII, NUL padded (5 values seen, see below)
+    #  10-11  flags, 2 bytes (first byte is 0x80 or 0x20 in 95.7% of records)
+    #  12-28  17-byte measurement block, undecoded
+    #  29     hertz (0, or 47-63 in all but 14 of 10,104 records)
+    #  30     unidentified byte
+    #  31     id (0x10, 0x11, 0x12)
+    #  32-33  version, u16 LE
+    #  34-37  serial number, u32 LE
+    #  38-48  11-byte trailer, undecoded
+    # Evidence and full-population validation: analysis/fst_part1_decoders.md.
+    CHARGER_RECORD_OFFSET = 6
+    CHARGER_RECORD_LEN = 49
+
+    @classmethod
+    def charger_info(cls, x):
+        """Type 0x48 - charger table (55 or 104 bytes: one or two 49-byte
+        charger records after the shared 6-byte prefix).
+
+        The name, flags, hertz, id, version and serial number are decoded.
+        The 17-byte measurement block, the single unidentified byte and the
+        11-byte trailer are kept, undecoded, in each record's raw_hex.
+
+        A payload whose length is not the prefix plus a whole number of
+        records, or whose name field is not NUL-padded printable ASCII,
+        falls back to the raw-hex report unhandled_entry_format() already
+        gives this type.
+        """
+        record_bytes = len(x) - cls.CHARGER_RECORD_OFFSET
+        if record_bytes < cls.CHARGER_RECORD_LEN or record_bytes % cls.CHARGER_RECORD_LEN:
+            return cls.unhandled_entry_format(0x48, x)
+
+        prefix = cls.fst_entry_prefix(x)
+        if prefix['subsecond_us'] > cls.FST_SUBSECOND_MAX_US:
+            return cls.unhandled_entry_format(0x48, x)
+
+        prefix = cls.fst_entry_prefix(x)
+        if prefix['subsecond_us'] > cls.FST_SUBSECOND_MAX_US:
+            return cls.unhandled_entry_format(0x48, x)
+
+        chargers = []
+        for index in range(record_bytes // cls.CHARGER_RECORD_LEN):
+            start = cls.CHARGER_RECORD_OFFSET + index * cls.CHARGER_RECORD_LEN
+            record = x[start:start + cls.CHARGER_RECORD_LEN]
+
+            name_field = bytes(record[0:10])
+            name_text = name_field.rstrip(b'\x00')
+            if not name_text or not all(32 <= c < 127 for c in name_text):
+                return cls.unhandled_entry_format(0x48, x)
+
+            chargers.append({
+                'name': name_text.decode('ascii').strip(),
+                'flags': BinaryTools.unpack('uint16', record, 10),
+                'hertz': BinaryTools.unpack('uint8', record, 29),
+                'id': BinaryTools.unpack('uint8', record, 31),
+                'version': BinaryTools.unpack('uint16', record, 32),
+                'serial_number': BinaryTools.unpack('uint32', record, 34),
+                'raw_hex': bytes(record).hex(),
+            })
+
+        structured_data = dict(prefix)
+        structured_data['charger_count'] = len(chargers)
+        structured_data['chargers'] = chargers
+
+        conditions = '; '.join(
+            f"{c['name']} id {c['id']}, serial {c['serial_number']}, "
+            f"version {c['version']}, {c['hertz']} Hz"
+            for c in chargers
+        )
+
+        return {
+            'event': 'Charger Info',
+            'conditions': conditions,
+            'structured_data': structured_data
+        }
+
+    @classmethod
+    def queue_full(cls, x):
+        """Type 0x4F - FreeRTOS queue-full report (24 bytes): the shared
+        6-byte prefix, a 10-byte NUL-padded ASCII queue name, then two
+        little-endian u32 values.
+
+        Eleven queue names occur in the FST/Gen3 file set (CAN1txQ, CAN2txQ,
+        logQ, CAN1RxQ, CAN0RxQ, uarttxQ, dashQ, uartrxQ, pduQ, CAN2RxQ,
+        lssQ); the name is not restricted to that list. The first u32 is a
+        near-constant per queue name (8 for logQ, 6 for dashQ, 16 for CAN2txQ
+        and so on, with a few exceptions), which reads like the queue's
+        capacity; the second varies from 1 to 20,283 and is not monotonic.
+        Neither is confirmed, so both are exposed under neutral names.
+        See analysis/issue16_entry_types.md and analysis/fst_part1_decoders.md.
+
+        Any payload that is not exactly 24 bytes, or whose name field is not
+        NUL-padded printable ASCII, or whose sub-second value is above
+        FST_SUBSECOND_MAX_US, falls back to the raw-hex report
+        unhandled_entry_format() already gives this type.
+        """
+        if len(x) != 24:
+            return cls.unhandled_entry_format(0x4f, x)
+
+        name_text = bytes(x[6:16]).rstrip(b'\x00')
+        if not name_text or not all(32 <= c < 127 for c in name_text):
+            return cls.unhandled_entry_format(0x4f, x)
+        queue_name = name_text.decode('ascii')
+
+        prefix = cls.fst_entry_prefix(x)
+        if prefix['subsecond_us'] > cls.FST_SUBSECOND_MAX_US:
+            return cls.unhandled_entry_format(0x4f, x)
+
+        structured_data = dict(prefix)
+        structured_data['queue_name'] = queue_name
+        structured_data['value_a'] = BinaryTools.unpack('uint32', x, 16)
+        structured_data['value_b'] = BinaryTools.unpack('uint32', x, 20)
+
+        return {
+            'event': 'Queue Full',
+            'conditions': (f"Queue {queue_name}: a={structured_data['value_a']}, "
+                           f"b={structured_data['value_b']}"),
+            'structured_data': structured_data
+        }
+
+    # Entry types 0x4B/0x4C/0x4D: one record family, three sizes. A telemetry
+    # sub-block widens by exactly 4 bytes per tier, and a 4-byte null-padded
+    # ASCII state tag sits at a fixed offset relative to the end of that
+    # block. Layout and evidence: analysis/atomicdog_family_decode.md;
+    # full-population confirmation: analysis/fst_part1_decoders.md.
+    # message_type -> (tier name, exact payload length, state tag offset)
+    STATE_SNAPSHOT_TIERS = {
+        0x4b: ('small', 46, 35),
+        0x4c: ('medium', 77, 39),
+        0x4d: ('large', 89, 43),
+    }
+    STATE_SNAPSHOT_TAGS = frozenset(
+        ['RUN', 'PWSU', 'CHRG', 'WAIT', 'STOP', 'HIB', 'WAKE', 'FWUP', 'STRT'])
+
+    @classmethod
+    def state_snapshot(cls, message_type, x):
+        """Types 0x4B/0x4C/0x4D - state-tagged snapshot (46/77/89 bytes).
+
+        Decodes only what was confirmed: the tier (implied by the type), the
+        state tag, and the shared 6-byte prefix. Every other byte is
+        unidentified and is kept as-is in raw_hex rather than guessed at.
+        Anything that is not exactly the expected length, or whose tag is
+        not one of the nine known values, falls back to the raw-hex report
+        unhandled_entry_format() already gives these types.
+        """
+        tier, length, tag_offset = cls.STATE_SNAPSHOT_TIERS[message_type]
+        if len(x) != length:
+            return cls.unhandled_entry_format(message_type, x)
+
+        tag_bytes = bytes(x[tag_offset:tag_offset + 4])
+        state = tag_bytes.rstrip(b'\x00').decode('ascii', errors='replace')
+        if state not in cls.STATE_SNAPSHOT_TAGS or tag_bytes != state.encode('ascii').ljust(4, b'\x00'):
+            return cls.unhandled_entry_format(message_type, x)
+
+        prefix = cls.fst_entry_prefix(x)
+        if prefix['subsecond_us'] > cls.FST_SUBSECOND_MAX_US:
+            return cls.unhandled_entry_format(message_type, x)
+
+        structured_data = {
+            'snapshot_tier': tier,
+            'state': state,
+        }
+        structured_data.update(prefix)
+        structured_data['raw_hex'] = bytes(x).hex()
+
+        return {
+            'event': 'State Snapshot',
+            'conditions': f'State: {state}, tier: {tier}',
+            'structured_data': structured_data
+        }
+
     @classmethod
     def battery_status(cls, x):
         opening_contactor = 'Opening Contractor'
@@ -2265,6 +2515,11 @@ class Gen2:
             0x3b: cls.precharge_decay_too_steep,
             0x3c: cls.disarmed_status,
             0x3d: cls.battery_contactor_closed,
+            0x48: cls.charger_info,             # Type 72
+            0x4b: lambda m: cls.state_snapshot(0x4b, m),  # Type 75
+            0x4c: lambda m: cls.state_snapshot(0x4c, m),  # Type 76
+            0x4d: lambda m: cls.state_snapshot(0x4d, m),  # Type 77
+            0x4f: cls.queue_full,               # Type 79
             0x51: cls.vehicle_state_telemetry,  # Type 81
             0x54: cls.sensor_data,              # Type 84
             0xfd: cls.debug_message
@@ -3378,36 +3633,75 @@ class LogData(object):
             unknown_entries = 0
             unknown = []
 
+            def format_structured_value(key, value):
+                """Format one structured_data value for text output. Shared
+                by format_structured_data below and by its own recursion into
+                a list of nested dicts (e.g. charger_info's 'chargers'), so
+                the raw_hex/corrupted-span convention applies at any depth
+                without each decoder reimplementing it."""
+                # The raw_hex key is this repo's one, newly-introduced name
+                # for "bytes a decoder never attempted to interpret" (see
+                # Gen2's undecoded_hex_display/mark_bytes_corrupted docstring
+                # comment); matched by exact key name only; the older,
+                # unrelated build_info_suffix_raw_hex field predates this
+                # convention and is deliberately left alone.
+                if key == 'raw_hex':
+                    return Gen2.undecoded_hex_display(bytes.fromhex(value))
+                if isinstance(value, list) and value and all(isinstance(v, dict) for v in value):
+                    return '[' + '; '.join(format_structured_data(v) for v in value) + ']'
+                if isinstance(value, str):
+                    return value
+                # Every check below is an unchanged substring match from the
+                # original version of this function, preserved as-is,
+                # including its pre-existing false-positive matches (e.g.
+                # 'max_current_amps' or 'voltage_max' read 'ma' out of "max"
+                # and render as milliamps on production today; not this
+                # task's bug to fix, left alone so this change touches
+                # nothing it wasn't asked to). The one exception is the
+                # literal key 'marker', a new field introduced by the FST
+                # decoders (Gen2.fst_entry_prefix) that the same 'ma'
+                # substring would otherwise also catch.
+                key_lower = key.lower()
+                if 'percent' in key_lower:
+                    return f"{value}%"
+                elif key != 'marker' and 'ma' in key_lower:  # Check mA before amps to avoid conflict
+                    return f"{value}mA"
+                elif 'amps' in key_lower or 'current' in key_lower:
+                    return f"{value}A"
+                elif 'mv' in key_lower:
+                    return f"{value}mV"
+                elif 'volts' in key_lower or 'voltage' in key_lower:
+                    return f"{value}V"
+                elif 'celsius' in key_lower or 'temp' in key_lower:
+                    return f"{value}°C"
+                else:
+                    return str(value)
+
             def format_structured_data(structured_data):
-                """Format structured data as readable key-value pairs"""
+                """Format structured data as readable key-value pairs. A
+                raw_hex field renders as a bracketed undecoded-hex tag with
+                no separate label; bytes_corrupted/corrupted_byte_count
+                (Gen2.mark_bytes_corrupted's real, machine-readable fields)
+                collapse into one bracketed corruption tag instead of two
+                key-value pairs. See Gen2's standing-convention comment above
+                its undecoded_hex_display/corrupted_span_display/
+                mark_bytes_corrupted definitions."""
                 if not structured_data:
                     return ""
 
-                # Create readable key-value pairs
                 formatted_pairs = []
                 for key, value in structured_data.items():
-                    # Convert snake_case to readable format
+                    if key in ('bytes_corrupted', 'corrupted_byte_count'):
+                        continue
+                    if key == 'raw_hex':
+                        formatted_pairs.append(format_structured_value(key, value))
+                        continue
                     readable_key = key.replace('_', ' ').title()
+                    formatted_pairs.append(f"{readable_key}: {format_structured_value(key, value)}")
 
-                    # Format value based on type and key patterns
-                    if isinstance(value, str):
-                        formatted_value = value
-                    elif 'percent' in key.lower():
-                        formatted_value = f"{value}%"
-                    elif 'ma' in key.lower():  # Check mA before amps to avoid conflict
-                        formatted_value = f"{value}mA"
-                    elif 'amps' in key.lower() or 'current' in key.lower():
-                        formatted_value = f"{value}A"
-                    elif 'mv' in key.lower():
-                        formatted_value = f"{value}mV"
-                    elif 'volts' in key.lower() or 'voltage' in key.lower():
-                        formatted_value = f"{value}V"
-                    elif 'celsius' in key.lower() or 'temp' in key.lower():
-                        formatted_value = f"{value}°C"
-                    else:
-                        formatted_value = str(value)
-
-                    formatted_pairs.append(f"{readable_key}: {formatted_value}")
+                if structured_data.get('bytes_corrupted'):
+                    formatted_pairs.append(
+                        Gen2.corrupted_span_display(structured_data.get('corrupted_byte_count', 0)))
 
                 return ", ".join(formatted_pairs)
 
