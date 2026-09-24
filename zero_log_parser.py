@@ -2434,41 +2434,12 @@ class Gen2:
         }
 
     @classmethod
-    def parse_entry(cls, log_data, address, unhandled, logger, timezone_offset=None, verbosity_level=1):
-        """
-        Parse an individual entry from a LogFile into a human readable form
-        """
-        try:
-            header = log_data[address]
-        # IndexError: bytearray index out of range
-        except IndexError:
-            logger.warn("IndexError log_data[%r]: forcing header_bad", address)
-            header = 0
-        # correct header offset as needed to prevent errors
-        header_bad = header != 0xb2
-        while header_bad:
-            address += 1
-            try:
-                header = log_data[address]
-            except IndexError:
-                # IndexError: bytearray index out of range
-                logger.warn("IndexError log_data[%r]: forcing header_bad", address)
-                header = 0
-                header_bad = True
-                break
-            header_bad = header != 0xb2
-        try:
-            length = log_data[address + 1]
-        # IndexError: bytearray index out of range
-        except IndexError:
-            length = 0
-
-        unescaped_block = BinaryTools.unescape_block(log_data[address + 0x2:address + length])
-
-        message_type = cls.type_from_block(unescaped_block)
-        message = unescaped_block[0x05:]
-
-        parsers = {
+    def _entry_parsers(cls):
+        """The message_type -> decoder dict parse_entry() dispatches through.
+        Factored out (pure extraction, no behavior change) so
+        collect_paged_bms_entries() can reuse the exact same dispatch table
+        rather than duplicating it."""
+        return {
             # Unknown entry types to be added when defined: type, length, source, example
             0x01: cls.board_status,
             # 0x02: unknown, 2, 6350_MBB_2016-04-12, 0x02 0x2e 0x11 ???
@@ -2524,6 +2495,243 @@ class Gen2:
             0x54: cls.sensor_data,              # Type 84
             0xfd: cls.debug_message
         }
+
+    # The FST/Gen3 BMS page format (131,328-byte files; see
+    # analysis/pattern_00f0ff00_entries_and_ecuid_outliers.md): every
+    # 128-byte page after the first starts with this literal 4-byte marker,
+    # overwriting whatever entry bytes were there. PAGE_SIZE is that stride.
+    PAGE_MARKER = b'\x00\xf0\xff\x00'
+    PAGE_SIZE = 128
+
+    @classmethod
+    def is_paged_bms_format(cls, buf):
+        """True if buf is the FST/Gen3 BMS page format: the marker present
+        at the start of the second and third 128-byte pages. Two pages, not
+        one, so a single coincidental 4-byte match elsewhere can't trigger
+        this - confirmed absent from every Gen3 MBB and 131,200-byte file
+        checked (0 of 418 plus 453), present in 100% of 131,328-byte files
+        checked (291 of 291)."""
+        if len(buf) < cls.PAGE_SIZE * 3:
+            return False
+        return (bytes(buf[cls.PAGE_SIZE:cls.PAGE_SIZE + 4]) == cls.PAGE_MARKER
+                and bytes(buf[cls.PAGE_SIZE * 2:cls.PAGE_SIZE * 2 + 4]) == cls.PAGE_MARKER)
+
+    @classmethod
+    def _marker_corrupted_entry(cls, event_suffix, corrupted_byte_count, undecoded_tail):
+        """A synthetic entry for bytes the page marker destroyed - either an
+        entry's type/timestamp header (found via a real 0xb2) or its entire
+        header including 0xb2 itself (recovered from a gap the resync walk
+        would otherwise silently skip). corrupted_byte_count covers exactly
+        the marker's own bytes (plus, for a recovered gap, whatever
+        unreadable bytes preceded it - never guessed at, just counted);
+        undecoded_tail is what's left after the marker, real surviving
+        bytes of unknown type, kept raw rather than interpreted. Per the
+        standing text-rendering convention (Gen2.corrupted_span_display /
+        undecoded_hex_display / mark_bytes_corrupted)."""
+        structured_data = {}
+        cls.mark_bytes_corrupted(structured_data, corrupted_byte_count)
+        conditions = cls.corrupted_span_display(corrupted_byte_count)
+        if undecoded_tail:
+            structured_data['raw_hex'] = bytes(undecoded_tail).hex()
+            conditions += cls.undecoded_hex_display(undecoded_tail)
+        return {
+            'event': 'Corrupted Entry' + event_suffix,
+            'conditions': conditions,
+            'structured_data': structured_data,
+            'time': 'Unknown',
+            'original_timestamp': None,
+            'message_type': 'CORRUPTED',
+            'log_level': 'WARNING',
+        }
+
+    @classmethod
+    def _sort_timestamp_for(cls, entry):
+        """Same time_str -> sort_timestamp logic
+        LogData._collect_and_process_entries' REV0/REV1/REV3 loop already
+        uses, factored out so collect_paged_bms_entries can build
+        (sort_timestamp, entry, entry_num) tuples in exactly the same shape."""
+        time_str = entry.get('time', '0')
+        if isinstance(time_str, str) and time_str.isdigit():
+            return int(time_str)
+        try:
+            try:
+                parsed_time = datetime.strptime(time_str, ZERO_TIME_FORMAT)
+            except ValueError:
+                parsed_time = datetime.strptime(time_str, '%m/%d/%Y %H:%M:%S')
+            return 0 if parsed_time.year > 2030 else parsed_time.timestamp()
+        except Exception:
+            return 0
+
+    @classmethod
+    def collect_paged_bms_entries(cls, buf, logger, timezone_offset=None, verbosity_level=1):
+        """Marker-aware entry walk for the FST/Gen3 BMS page format
+        (is_paged_bms_format()). Builds the same (sort_timestamp,
+        entry_payload, entry_num) list LogData._collect_and_process_entries'
+        normal REV0/REV1/REV3 loop builds, so it plugs into the same
+        downstream interpolation/filter/sort pipeline - but walks the whole
+        buffer rather than a fixed entries_count budget (the recovered gap
+        entries below have no 0xb2 of their own, so they're never counted
+        in that budget; see analysis/fst_page_aware_walker.md for why a
+        larger budget alone doesn't fix this without also detecting them).
+
+        Two corrections over the normal walk, both confirmed at full
+        population scale (291 files) before implementing:
+
+        - Type destroyed: a real entry is found (0xb2 and length intact),
+          but the marker overwrote its type byte and part of its
+          timestamp (unescaped_block[0:4] == PAGE_MARKER). Today this
+          silently misreads as type 0x00 ("Board Status", a real, different
+          type) - confirmed on 5,186 entries. The type and timestamp are
+          unrecoverable; the rest of the entry (from byte 4 on) is intact
+          and kept in raw_hex.
+        - Header destroyed: the marker overwrote the entry's own 0xb2 (and
+          usually its length and type too), so the normal resync walk finds
+          no 0xb2 there and silently treats the whole span as filler,
+          invisible in the output. Recovered when the marker sits within
+          the first 3 bytes of the otherwise-unexplained gap before the
+          next real 0xb2 (at least 8 bytes total) and real data - not just
+          fill - follows the marker; confirmed on 11,136 such gaps, 97.6%
+          of every gap this shape could apply to.
+
+        Anything else - a marker elsewhere inside an otherwise normal
+        entry, a gap that doesn't fit either shape, a marker on a page
+        that was never written (all-0xff) - is left exactly as the normal
+        walk already handles it. No byte is reconstructed or guessed at
+        anywhere in this function.
+        """
+        n = len(buf)
+        parsers = cls._entry_parsers()
+
+        # Pass 1: find every entry's (start, length) exactly as the normal
+        # resync walk does - same header search, same zero-length handling
+        # (a corrupted/absent length byte still yields a span, one byte
+        # wide, so the walk cannot freeze) - but unbounded by any
+        # entries_count budget, so it reaches the true end of the buffer.
+        # This is deliberately a separate pass from Pass 2 below: computing
+        # gaps from each entry's own recorded span, rather than from
+        # wherever a single combined pass's read_pos happens to be at any
+        # given moment, is what makes a zero-length entry's own zero-length
+        # handling (which jumps straight to the next real 0xb2) not also
+        # silently jump over a marker sitting in the region it jumps past -
+        # a real bug an earlier, single-pass version of this function had.
+        spans = []
+        read_pos = 0
+        while read_pos < n:
+            addr = read_pos
+            while addr < n and buf[addr] != 0xb2:
+                addr += 1
+            if addr >= n:
+                break
+            length = buf[addr + 1] if addr + 1 < n else 0
+            spans.append((addr, addr + length if length > 0 else addr + 1, length))
+            if length > 0:
+                read_pos = addr + length
+            else:
+                nxt = buf.find(b'\xb2', addr + 1)
+                read_pos = nxt if nxt > read_pos else read_pos + 1
+
+        collected = []
+        entry_num = 0
+
+        def add(entry):
+            nonlocal entry_num
+            collected.append((cls._sort_timestamp_for(entry), entry, entry_num))
+            entry_num += 1
+
+        # Pass 2: walk the spans in byte order, emitting the recovered gap
+        # entry immediately before the real entry that follows it -
+        # collected_entries must stay in byte order, not "all gaps then all
+        # entries", since interpolate_missing_timestamps() (called on this
+        # function's return value, same as the normal walk's) fills in a
+        # missing timestamp - true for every entry here, gap or type-
+        # destroyed alike - from its neighbors' position in the list, not
+        # from entry_num.
+        prev_end = 0
+        for start, end, length in spans:
+            gap = buf[prev_end:start]
+            if gap:
+                marker_pos = gap.find(cls.PAGE_MARKER)
+                tail = gap[marker_pos + 4:] if marker_pos != -1 else b''
+                if (marker_pos != -1 and marker_pos <= 3 and len(gap) >= 8
+                        and set(tail) - {0xff}):
+                    add(cls._marker_corrupted_entry(' (header destroyed)', marker_pos + 4, tail))
+                # else: an unexplained gap - left unvisited, exactly like
+                # the normal walk already does for any resync gap.
+            prev_end = end
+
+            try:
+                unescaped_block = BinaryTools.unescape_block(buf[start + 2:start + length])
+            except Exception as e:
+                logger.warning(f'Error parsing entry at {start}: {e}')
+                continue
+
+            if len(unescaped_block) >= 4 and bytes(unescaped_block[0:4]) == cls.PAGE_MARKER:
+                add(cls._marker_corrupted_entry(' (type destroyed)', 4, unescaped_block[4:]))
+                continue
+
+            message_type = cls.type_from_block(unescaped_block)
+            message = unescaped_block[0x05:]
+            entry_parser = parsers.get(message_type)
+            try:
+                if entry_parser:
+                    entry = entry_parser(message)
+                else:
+                    entry = cls.unhandled_entry_format(message_type, message)
+            except Exception:
+                entry = cls.unhandled_entry_format(message_type, message)
+                entry['event'] = 'Exception caught: ' + entry['event']
+
+            entry['time'] = cls.timestamp_from_event(unescaped_block, timezone_offset=timezone_offset)
+            entry['original_timestamp'] = BinaryTools.unpack('uint32', unescaped_block, 0x01)
+            if 'structured_data' not in entry:
+                improved_event, improved_conditions, *_rest = improve_message_parsing(
+                    entry.get('event', ''), entry.get('conditions', ''),
+                    verbosity_level=verbosity_level, logger=logger)
+                entry['event'] = improved_event
+                entry['conditions'] = improved_conditions
+            if not entry.get('log_level'):
+                entry['log_level'] = determine_log_level(entry.get('event', ''))
+            entry['message_type'] = f"0x{message_type:X}"
+            add(entry)
+
+        return collected
+
+    @classmethod
+    def parse_entry(cls, log_data, address, unhandled, logger, timezone_offset=None, verbosity_level=1):
+        """
+        Parse an individual entry from a LogFile into a human readable form
+        """
+        try:
+            header = log_data[address]
+        # IndexError: bytearray index out of range
+        except IndexError:
+            logger.warn("IndexError log_data[%r]: forcing header_bad", address)
+            header = 0
+        # correct header offset as needed to prevent errors
+        header_bad = header != 0xb2
+        while header_bad:
+            address += 1
+            try:
+                header = log_data[address]
+            except IndexError:
+                # IndexError: bytearray index out of range
+                logger.warn("IndexError log_data[%r]: forcing header_bad", address)
+                header = 0
+                header_bad = True
+                break
+            header_bad = header != 0xb2
+        try:
+            length = log_data[address + 1]
+        # IndexError: bytearray index out of range
+        except IndexError:
+            length = 0
+
+        unescaped_block = BinaryTools.unescape_block(log_data[address + 0x2:address + length])
+
+        message_type = cls.type_from_block(unescaped_block)
+        message = unescaped_block[0x05:]
+
+        parsers = cls._entry_parsers()
         entry_parser = parsers.get(message_type)
         try:
             if entry_parser:
@@ -2817,7 +3025,19 @@ class LogData(object):
             collected_entries = []
             read_pos = 0
 
-            if hasattr(self, 'entries_count'):
+            if self.log_version == REV3 and Gen2.is_paged_bms_format(self.entries):
+                # The FST/Gen3 BMS page format - see
+                # analysis/fst_page_aware_walker.md. A dedicated walker,
+                # not the loop below: the marker this format carries at
+                # every 128-byte page destroys some entries' 0xb2 header
+                # entirely, which the normal resync-based loop (bounded by
+                # a fixed entries_count budget, and blind to anything that
+                # doesn't start with 0xb2) can never make visible no
+                # matter how that loop is tuned.
+                collected_entries = Gen2.collect_paged_bms_entries(
+                    self.entries, logger, timezone_offset=self.timezone_offset,
+                    verbosity_level=verbosity_level)
+            elif hasattr(self, 'entries_count'):
                 for entry_num in range(self.entries_count):
                     try:
                         (length, entry_payload, unhandled) = Gen2.parse_entry(self.entries, read_pos,
@@ -2865,47 +3085,47 @@ class LogData(object):
                         logger.warning(f'Error parsing entry {entry_num}: {e}')
                         break
 
-                # Apply timestamp interpolation before sorting
-                collected_entries = Gen2.interpolate_missing_timestamps(collected_entries, logger)
+            # Apply timestamp interpolation before sorting
+            collected_entries = Gen2.interpolate_missing_timestamps(collected_entries, logger)
 
-                # Apply time filtering if specified
-                if start_time or end_time:
-                    collected_entries = self._filter_collected_entries(collected_entries, start_time, end_time)
-                    logger.info(f"Filtered to {len(collected_entries)} entries based on time range")
+            # Apply time filtering if specified
+            if start_time or end_time:
+                collected_entries = self._filter_collected_entries(collected_entries, start_time, end_time)
+                logger.info(f"Filtered to {len(collected_entries)} entries based on time range")
 
-                # Sort by timestamp (newest first)
-                collected_entries.sort(key=lambda x: x[0], reverse=True)
+            # Sort by timestamp (newest first)
+            collected_entries.sort(key=lambda x: x[0], reverse=True)
 
-                # Process sorted entries into ProcessedLogEntry objects
-                for line_num, (sort_timestamp, entry_payload, original_entry_num) in enumerate(collected_entries):
-                    message = entry_payload.get('event', '')
-                    conditions = entry_payload.get('conditions', '')
-                    log_level = entry_payload.get('log_level', 'INFO')
+            # Process sorted entries into ProcessedLogEntry objects
+            for line_num, (sort_timestamp, entry_payload, original_entry_num) in enumerate(collected_entries):
+                message = entry_payload.get('event', '')
+                conditions = entry_payload.get('conditions', '')
+                log_level = entry_payload.get('log_level', 'INFO')
 
-                    # Check if message has already been processed by Gen2/Gen3 parsers
-                    existing_message_type = entry_payload.get('message_type')
-                    structured_data = entry_payload.get('structured_data')
-                    has_json_data = structured_data is not None
+                # Check if message has already been processed by Gen2/Gen3 parsers
+                existing_message_type = entry_payload.get('message_type')
+                structured_data = entry_payload.get('structured_data')
+                has_json_data = structured_data is not None
 
-                    # Message was already processed by Gen2/Gen3 parser - use as-is
-                    improved_message = message
-                    improved_conditions = conditions
-                    message_type = existing_message_type
+                # Message was already processed by Gen2/Gen3 parser - use as-is
+                improved_message = message
+                improved_conditions = conditions
+                message_type = existing_message_type
 
-                    processed_entry = ProcessedLogEntry(
-                        entry_number=original_entry_num + 1,
-                        timestamp=entry_payload.get('time', ''),
-                        sort_timestamp=sort_timestamp if sort_timestamp > 0 else None,
-                        log_level=log_level,
-                        event=improved_message,
-                        conditions=improved_conditions if improved_conditions else "",
-                        uninterpreted="",
-                        structured_data=structured_data,
-                        has_structured_data=has_json_data,
-                        message_type=message_type,
-                        original_timestamp=str(entry_payload.get('original_timestamp', ''))
-                    )
-                    processed_entries.append(processed_entry)
+                processed_entry = ProcessedLogEntry(
+                    entry_number=original_entry_num + 1,
+                    timestamp=entry_payload.get('time', ''),
+                    sort_timestamp=sort_timestamp if sort_timestamp > 0 else None,
+                    log_level=log_level,
+                    event=improved_message,
+                    conditions=improved_conditions if improved_conditions else "",
+                    uninterpreted="",
+                    structured_data=structured_data,
+                    has_structured_data=has_json_data,
+                    message_type=message_type,
+                    original_timestamp=str(entry_payload.get('original_timestamp', ''))
+                )
+                processed_entries.append(processed_entry)
 
         else:
             # Handle REV2 (Gen3) format
