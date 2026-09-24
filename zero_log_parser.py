@@ -1717,6 +1717,12 @@ class Gen2:
     # 24-byte ASCII text entry of type 0x4F that passes every other check.
     FST_SUBSECOND_MAX_US = 1000000
 
+    # No entry of any type in the FST/Gen3 file set carries a sub-second value
+    # above this (the maximum seen is exactly 1,000,000), so a decoder that
+    # sees more is not looking at an FST entry. Two legacy BMS files hold a
+    # 24-byte ASCII text entry of type 0x4F that passes every other check.
+    FST_SUBSECOND_MAX_US = 1000000
+
     @classmethod
     def fst_entry_prefix(cls, x):
         """The 6-byte prefix at the start of every FST/Gen3 MBB entry payload
@@ -1774,6 +1780,10 @@ class Gen2:
         """
         record_bytes = len(x) - cls.CHARGER_RECORD_OFFSET
         if record_bytes < cls.CHARGER_RECORD_LEN or record_bytes % cls.CHARGER_RECORD_LEN:
+            return cls.unhandled_entry_format(0x48, x)
+
+        prefix = cls.fst_entry_prefix(x)
+        if prefix['subsecond_us'] > cls.FST_SUBSECOND_MAX_US:
             return cls.unhandled_entry_format(0x48, x)
 
         prefix = cls.fst_entry_prefix(x)
@@ -1911,6 +1921,60 @@ class Gen2:
 
         return {
             'event': 'State Snapshot',
+            'conditions': f'State: {state}, tier: {tier}',
+            'structured_data': structured_data
+        }
+
+    # Entry types 0x52 and 0x53: the medium and large tiers of the family
+    # whose small tier is 0x51 (vehicle_state_telemetry). Same head layout as
+    # 0x51 and as 0x4B-0x4D: the shared 6-byte prefix, then a block that
+    # widens by 4 bytes per tier, then a 21-byte segment, then the 4-byte
+    # NUL-padded ASCII state tag, so the tag sits at payload offset 35 / 39 /
+    # 43 for 0x51 / 0x52 / 0x53. Each tier also comes in a variant 4 bytes
+    # longer (0x52: 81 and 85 bytes; 0x53: 95 and 99, plus a rare 93).
+    # Only the tag and framing are decoded; every other byte is preserved in
+    # raw_hex. Evidence: analysis/fst_part2_unknown_types.md.
+    # message_type -> (tier name, accepted payload lengths, state tag offset)
+    TELEMETRY_TIERS = {
+        0x52: ('medium', (81, 85), 39),
+        0x53: ('large', (93, 95, 99), 43),
+    }
+    TELEMETRY_TAGS = frozenset(
+        ['RUN', 'PWSU', 'CHRG', 'WAIT', 'STOP', 'HIB', 'WAKE', 'FWUP', 'STRT', 'REV', 'PARK'])
+
+    @classmethod
+    def vehicle_state_telemetry_tier(cls, message_type, x):
+        """Types 0x52 / 0x53 - state-tagged telemetry, medium / large tier.
+
+        Decodes the tier, the state tag and the shared 6-byte prefix. The
+        fields between them and after the tag are unidentified (the layout
+        was mapped by shape only) and are kept in raw_hex. A payload whose
+        length is not one of the accepted variants, or whose tag is not one
+        of the known state names, falls back to the raw-hex report
+        unhandled_entry_format() already gives these types.
+        """
+        tier, lengths, tag_offset = cls.TELEMETRY_TIERS[message_type]
+        if len(x) not in lengths:
+            return cls.unhandled_entry_format(message_type, x)
+
+        tag_bytes = bytes(x[tag_offset:tag_offset + 4])
+        state = tag_bytes.rstrip(b'\x00').decode('ascii', errors='replace')
+        if state not in cls.TELEMETRY_TAGS or tag_bytes != state.encode('ascii').ljust(4, b'\x00'):
+            return cls.unhandled_entry_format(message_type, x)
+
+        prefix = cls.fst_entry_prefix(x)
+        if prefix['subsecond_us'] > cls.FST_SUBSECOND_MAX_US:
+            return cls.unhandled_entry_format(message_type, x)
+
+        structured_data = {
+            'telemetry_tier': tier,
+            'state': state,
+        }
+        structured_data.update(prefix)
+        structured_data['raw_hex'] = bytes(x).hex()
+
+        return {
+            'event': 'Vehicle State Telemetry',
             'conditions': f'State: {state}, tier: {tier}',
             'structured_data': structured_data
         }
@@ -2492,6 +2556,8 @@ class Gen2:
             0x4d: lambda m: cls.state_snapshot(0x4d, m),  # Type 77
             0x4f: cls.queue_full,               # Type 79
             0x51: cls.vehicle_state_telemetry,  # Type 81
+            0x52: lambda m: cls.vehicle_state_telemetry_tier(0x52, m),  # Type 82
+            0x53: lambda m: cls.vehicle_state_telemetry_tier(0x53, m),  # Type 83
             0x54: cls.sensor_data,              # Type 84
             0xfd: cls.debug_message
         }
