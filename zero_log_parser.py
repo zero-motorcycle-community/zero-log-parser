@@ -1078,6 +1078,47 @@ class Gen2:
         }
 
     @classmethod
+    def mbb_throttle_enable_wire_disable(cls, x):
+        """Type 0x10 in MBB files only: "BMS Throt En Wire Disable  vpack =
+        %lumV, thr_en = %lumV", 8 bytes: uint32 LE vpack mV, uint32 LE
+        thr_en mV. Classic MBB firmware's own name for this type id, a
+        namespace collision with the BMS-side 0x10 (bms_state, "Entering"/
+        "Exiting Hibernate") - the two decoders differ, and which one runs
+        depends on the file's own log_type, resolved in _entry_parsers()."""
+        if len(x) != 8:
+            return cls.unhandled_entry_format(0x10, x)
+        vpack_volt = convert_mv_to_v(BinaryTools.unpack('uint32', x, 0x00))
+        thr_en_volt = convert_mv_to_v(BinaryTools.unpack('uint32', x, 0x04))
+        return {
+            'event': 'BMS Throt En Wire Disable',
+            'structured_data': {
+                'vpack_voltage_volts': vpack_volt,
+                'thr_en_voltage_volts': thr_en_volt,
+            },
+            'conditions': 'vpack: {v:.3f}V, thr_en: {t:.3f}V'.format(v=vpack_volt, t=thr_en_volt),
+        }
+
+    @classmethod
+    def mbb_throttle_enable_wire_reenable(cls, x):
+        """Type 0x11 in MBB files only: "BMS Throt Wire Re-enable   vpack =
+        %lumV, thr_en = %lumV", same 8-byte layout as
+        mbb_throttle_enable_wire_disable(). Namespace collision with the
+        BMS-side 0x11 (bms_isolation_fault, "Chassis Isolation Fault");
+        routed by log_type in _entry_parsers()."""
+        if len(x) != 8:
+            return cls.unhandled_entry_format(0x11, x)
+        vpack_volt = convert_mv_to_v(BinaryTools.unpack('uint32', x, 0x00))
+        thr_en_volt = convert_mv_to_v(BinaryTools.unpack('uint32', x, 0x04))
+        return {
+            'event': 'BMS Throt Wire Re-enable',
+            'structured_data': {
+                'vpack_voltage_volts': vpack_volt,
+                'thr_en_voltage_volts': thr_en_volt,
+            },
+            'conditions': 'vpack: {v:.3f}V, thr_en: {t:.3f}V'.format(v=vpack_volt, t=thr_en_volt),
+        }
+
+    @classmethod
     def bms_reflash(cls, x):
         # Extract binary data once
         revision = BinaryTools.unpack('uint8', x, 0x00)
@@ -2826,12 +2867,23 @@ class Gen2:
         }
 
     @classmethod
-    def _entry_parsers(cls):
+    def _entry_parsers(cls, log_type=None):
         """The message_type -> decoder dict parse_entry() dispatches through.
         Factored out (pure extraction, no behavior change) so
         collect_paged_bms_entries() can reuse the exact same dispatch table
-        rather than duplicating it."""
-        return {
+        rather than duplicating it.
+
+        One shared table across MBB and BMS files, with a narrow,
+        explicit override for the two type ids the classic MBB and BMS
+        firmwares both use for unrelated events:
+        0x10/0x11 decode as BMS Hibernate /
+        Chassis Isolation Fault by default (log_type omitted, 'BMS', or
+        'Unknown Type' - the existing, unchanged behavior for anything not
+        confirmed MBB), and as the MBB firmware's own BMS Throt En/Re-
+        enable Wire events only when log_type is definitely 'MBB'
+        (LogFile.log_type_mbb). Every other type id is unaffected by
+        log_type."""
+        parsers = {
             # Unknown entry types to be added when defined: type, length, source, example
             0x01: cls.board_status,
             # 0x02: unknown, 2, 6350_MBB_2016-04-12, 0x02 0x2e 0x11 ???
@@ -2890,6 +2942,10 @@ class Gen2:
             0x54: cls.sensor_data,              # Type 84
             0xfd: cls.debug_message
         }
+        if log_type == LogFile.log_type_mbb:
+            parsers[0x10] = cls.mbb_throttle_enable_wire_disable
+            parsers[0x11] = cls.mbb_throttle_enable_wire_reenable
+        return parsers
 
     # The FST/Gen3 BMS page format (131,328-byte files; see
     # analysis/pattern_00f0ff00_entries_and_ecuid_outliers.md): every
@@ -2958,7 +3014,7 @@ class Gen2:
             return 0
 
     @classmethod
-    def collect_paged_bms_entries(cls, buf, logger, timezone_offset=None, verbosity_level=1):
+    def collect_paged_bms_entries(cls, buf, logger, timezone_offset=None, verbosity_level=1, log_type=None):
         """Marker-aware entry walk for the FST/Gen3 BMS page format
         (is_paged_bms_format()). Builds the same (sort_timestamp,
         entry_payload, entry_num) list LogData._collect_and_process_entries'
@@ -2993,9 +3049,18 @@ class Gen2:
         that was never written (all-0xff) - is left exactly as the normal
         walk already handles it. No byte is reconstructed or guessed at
         anywhere in this function.
+
+        log_type is threaded through to _entry_parsers() for the same
+        0x10/0x11 file-type routing parse_entry() applies.
+        This walker only ever runs on the
+        131,328-byte FST/Gen3 BMS page format (is_paged_bms_format()),
+        which is BMS-only in every file checked, so passing 'BMS' or
+        omitting log_type has the same effect in practice; it is threaded
+        through anyway so the two walkers stay consistent rather than one
+        silently depending on a platform fact the other doesn't rely on.
         """
         n = len(buf)
-        parsers = cls._entry_parsers()
+        parsers = cls._entry_parsers(log_type)
 
         # Pass 1: find every entry's (start, length) exactly as the normal
         # resync walk does - same header search, same zero-length handling
@@ -3092,9 +3157,15 @@ class Gen2:
         return collected
 
     @classmethod
-    def parse_entry(cls, log_data, address, unhandled, logger, timezone_offset=None, verbosity_level=1):
+    def parse_entry(cls, log_data, address, unhandled, logger, timezone_offset=None, verbosity_level=1, log_type=None):
         """
         Parse an individual entry from a LogFile into a human readable form
+
+        log_type (LogFile.log_type_mbb / log_type_bms / log_type_unknown,
+        or None) routes the handful of type ids the classic MBB and BMS
+        firmwares both use for unrelated events - currently 0x10/0x11 -
+        to the right decoder. Omitting it keeps the pre-existing,
+        BMS-decoder behavior. See _entry_parsers().
         """
         try:
             header = log_data[address]
@@ -3126,7 +3197,7 @@ class Gen2:
         message_type = cls.type_from_block(unescaped_block)
         message = unescaped_block[0x05:]
 
-        parsers = cls._entry_parsers()
+        parsers = cls._entry_parsers(log_type)
         entry_parser = parsers.get(message_type)
         try:
             if entry_parser:
@@ -3431,14 +3502,15 @@ class LogData(object):
                 # matter how that loop is tuned.
                 collected_entries = Gen2.collect_paged_bms_entries(
                     self.entries, logger, timezone_offset=self.timezone_offset,
-                    verbosity_level=verbosity_level)
+                    verbosity_level=verbosity_level, log_type=self.log_file.log_type)
             elif hasattr(self, 'entries_count'):
                 for entry_num in range(self.entries_count):
                     try:
                         (length, entry_payload, unhandled) = Gen2.parse_entry(self.entries, read_pos,
                                                                               0,  # unhandled counter
                                                                               timezone_offset=self.timezone_offset,
-                                                                              logger=logger, verbosity_level=verbosity_level)
+                                                                              logger=logger, verbosity_level=verbosity_level,
+                                                                              log_type=self.log_file.log_type)
 
                         # Extract timestamp for sorting
                         time_str = entry_payload.get('time', '0')

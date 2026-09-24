@@ -312,16 +312,45 @@ Offset | Length | Contents
 0x07   | 2      | B balance = H - L (mV)
 0x09   | 1      | BT BMS temp (°C)
 
-### `0x10` - BMS Hibernate
+### `0x10` and `0x11` - a namespace collision between BMS and classic MBB
+
+The classic BMS and MBB firmwares both write events at these two type
+ids, unrelated events, told apart by which file the entry is in
+(`Gen2._entry_parsers(log_type=...)`, dispatched from the file's own
+`LogFile.log_type`).
+
+**BMS files:**
+
+#### `0x10` - BMS Hibernate
 Offset | Length | Contents
 ------ | :----: | --------
 0x00   | 1      | state 0 = 'Exiting', 1 = 'Entering'
 
-### `0x11` - BMS Chassis Isolation Fault
+#### `0x11` - BMS Chassis Isolation Fault
 Offset | Length | Contents
 ------ | :----: | --------
 0x00   | 4      | ohms to cell
 0x04   | 1      | cell
+
+**MBB files** (the classic MBB firmware's own renderer names, previously
+routed through the BMS decoders above regardless of file type - 5,733
+entries in the real logs checked):
+
+#### `0x10` - BMS Throt En Wire Disable
+Offset | Length | Contents
+------ | :----: | --------
+0x00   | 4      | vpack, mV (uint32 LE)
+0x04   | 4      | thr_en, mV (uint32 LE)
+
+#### `0x11` - BMS Throt Wire Re-enable
+Offset | Length | Contents
+------ | :----: | --------
+0x00   | 4      | vpack, mV (uint32 LE)
+0x04   | 4      | thr_en, mV (uint32 LE)
+
+Both decode identically (`vpack_voltage_volts`, `thr_en_voltage_volts`);
+only the event name differs. Any length other than 8 bytes falls back to
+the raw-hex report.
 
 ### `0x12` - BMS Reflash
 Offset | Length | Contents
