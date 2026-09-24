@@ -175,11 +175,16 @@ def test_parse_entry_end_to_end_mbb_vs_bms_log_type():
     _length, entry, _unhandled = Gen2.parse_entry(raw11, 0, 0, logger, log_type=LogFile.log_type_mbb)
     assert entry['event'] == 'BMS Throt Wire Re-enable'
 
-    # Omitting log_type, or passing 'BMS', must decode the same 8-byte MBB
-    # payload with the BMS decoder instead (a real risk: bms_state() and
-    # bms_isolation_fault() don't length-gate, so they will produce *some*
-    # output from an 8-byte buffer, just the wrong one).
-    for log_type in (None, LogFile.log_type_bms):
+    # Omitting log_type, passing 'BMS', or passing 'Unknown Type' (a file
+    # whose own magic string and filename both failed to say MBB or BMS)
+    # must all
+    # decode the same 8-byte MBB payload with the BMS decoder instead (a
+    # real risk: bms_state() and bms_isolation_fault() don't length-gate,
+    # so they will produce *some* output from an 8-byte buffer, just the
+    # wrong one). Previously only checked at the _entry_parsers() table
+    # level for 'Unknown Type'; added here too so the actual entry point
+    # every real caller uses is covered, not just the table it calls.
+    for log_type in (None, LogFile.log_type_bms, LogFile.log_type_unknown):
         _length, entry, _unhandled = Gen2.parse_entry(raw10, 0, 0, logger, log_type=log_type)
         assert entry['event'] in ('Entering Hibernate', 'Exiting Hibernate')
         _length, entry, _unhandled = Gen2.parse_entry(raw11, 0, 0, logger, log_type=log_type)
@@ -191,7 +196,7 @@ def test_parse_entry_real_bms_payloads_unchanged_with_bms_log_type():
     raw10 = _raw_entry(0x10, SAMPLE_BMS_10_ENTERING)
     raw11 = _raw_entry(0x11, SAMPLE_BMS_11)
 
-    for log_type in (None, LogFile.log_type_bms):
+    for log_type in (None, LogFile.log_type_bms, LogFile.log_type_unknown):
         _length, entry, _unhandled = Gen2.parse_entry(raw10, 0, 0, logger, log_type=log_type)
         assert entry['event'] == 'Entering Hibernate'
         _length, entry, _unhandled = Gen2.parse_entry(raw11, 0, 0, logger, log_type=log_type)
