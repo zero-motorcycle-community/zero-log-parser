@@ -731,19 +731,38 @@ Offset | Length | Contents
 ### `0xfb` (Type 251) - System Information
 *Added in 2025+ firmware - appears once per log session*
 
-**Purpose**: System identification and configuration data
+**Purpose**: System identification and configuration data. Decoded by
+`Gen2.mbb_system_information()`.
+
+Written by both MBB and BMS firmware under this same type id, with
+genuinely different payloads - confirmed against real logs,
+not assumed from the field names. A 4-byte identifier at payload
+offset 6 (or 7, see shift below) reads `MBB\0` on the MBB side and
+`BMS\0` on the BMS side; only the MBB shape is decoded today. BMS's
+copy carries no vehicle VIN anywhere in the payload, and instead
+reports a hardware descriptor (`"FST Mono"`), its own board serial and
+firmware part number, at different offsets than the MBB layout below.
+
+**MBB shape**, offsets relative to the entry's own payload (after the
+standard 5-byte type+timestamp header), shifted by +1 together on a
+small minority of files, the same firmware-variant ambiguity
+the Gen3 header decode's own `0x29`/`0x2A` whole-file search handles
+(not the same underlying cause, though):
 
 Offset | Length | Contents
 ------ | :----: | --------
-0x00   | ~110   | System information block
+0x06   | 4      | Identifier, `"MBB\0"`
+0x12   | 16     | Model (e.g. "SRF", null-terminated)
+0x22   | 17     | VIN, checksum-validated (e.g., "538DZAZ81PCN25719")
+0x35   | 16     | Serial number (e.g., "SJ0419ZER9901", null-terminated)
+0x55   | 16     | Firmware version (e.g., "40-08198", null-terminated)
+0x5E   | 1      | Board rev.
+0x60   | 1      | Firmware rev.
 
-**Decoded contents:**
-- **MBB identifier**: "MBB" string at start
-- **VIN number**: 17-character vehicle identification (e.g., "538DZAZ81PCN25719")
-- **Serial numbers**: Multiple system component serials (e.g., "RKT2302023467")
-- **Firmware version**: Version strings (e.g., "40-08198")
-- **System configuration**: Hardware IDs and setup parameters
-- **Checksums**: Data integrity verification values
+A further hash-style build field (e.g. `"dfb7a27"`) follows Firmware
+rev. but is not decoded: its position drifts relative to a preceding
+checksum-like field whenever that field's raw bytes need byte-stuffing
+removal, so it isn't a fixed offset the way the fields above are.
 
 **Example data extracted:**
 ```
