@@ -318,6 +318,11 @@ The classic BMS and MBB firmwares both write events at these two type
 ids, unrelated events, told apart by which file the entry is in
 (`Gen2._entry_parsers(log_type=...)`, dispatched from the file's own
 `LogFile.log_type`).
+An Unknown Type file (`LogFile.log_type` neither MBB nor BMS) is also
+routed to the MBB decoders when `LogFile.has_classic_vin` finds a real,
+checksum-valid VIN at the classic offset (0x240 or 0x252) - a narrow,
+file-level signal, safe on every real BMS log checked, that covers
+part of the Unknown Type gap.
 
 **BMS files:**
 

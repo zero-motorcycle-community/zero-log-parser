@@ -522,6 +522,7 @@ class LogFile:
         self._data = bytearray()
         self.reload()
         self.log_type = self.get_log_type()
+        self.has_classic_vin = self.get_has_classic_vin()
 
     def reload(self):
         with open(self.file_path, 'rb') as f:
@@ -591,6 +592,23 @@ class LogFile:
 
     def is_unknown(self):
         return self.log_type == self.log_type_unknown
+
+    def get_has_classic_vin(self):
+        """True if a real, FMVSS 565 checksum-valid VIN sits at either
+        known classic-layout offset (0x240 or 0x252), independent of
+        get_log_type()'s own fragile magic-string/filename detection.
+        Guarded by size the same way get_version_and_header()'s own
+        _legacy_vin_present() is: these offsets are only meaningful, and
+        only safe to read, on the classic 262144-byte layout. A file
+        this returns True for is, by construction, one
+        get_version_and_header() would also classify REV0/REV1 (it uses
+        the same two offsets to do so) - this only exists so dispatch
+        can use that same fact when log_type's own detection missed it."""
+        if len(self._data) < 0x252 + vin_length:
+            return False
+        v0 = self.unpack_str(0x240, count=vin_length)
+        v1 = self.unpack_str(0x252, count=vin_length)
+        return is_valid_vin_checksum(v0) or is_valid_vin_checksum(v1)
 
     def get_filename_vin(self):
         basename = os.path.basename(self.file_path)
@@ -3486,6 +3504,18 @@ class LogData(object):
 
         processed_entries = []
 
+        # The dispatch-relevant type: the file's own log_type, upgraded
+        # to MBB when log_type's own filename/magic-string detection
+        # landed on Unknown Type but a real, checksum-valid VIN at a
+        # known classic offset proves the content is classic MBB anyway
+        # (LogFile.has_classic_vin).
+        # Never downgrades a definite BMS or MBB call; only fills the
+        # Unknown Type gap where a stronger, independent structural
+        # signal already exists.
+        dispatch_log_type = self.log_file.log_type
+        if dispatch_log_type == LogFile.log_type_unknown and self.log_file.has_classic_vin:
+            dispatch_log_type = LogFile.log_type_mbb
+
         if self.log_version < REV2 or self.log_version == REV3:
             # Handle REV0/REV1/REV3 formats - collect and sort entries
             collected_entries = []
@@ -3502,7 +3532,7 @@ class LogData(object):
                 # matter how that loop is tuned.
                 collected_entries = Gen2.collect_paged_bms_entries(
                     self.entries, logger, timezone_offset=self.timezone_offset,
-                    verbosity_level=verbosity_level, log_type=self.log_file.log_type)
+                    verbosity_level=verbosity_level, log_type=dispatch_log_type)
             elif hasattr(self, 'entries_count'):
                 for entry_num in range(self.entries_count):
                     try:
@@ -3510,7 +3540,7 @@ class LogData(object):
                                                                               0,  # unhandled counter
                                                                               timezone_offset=self.timezone_offset,
                                                                               logger=logger, verbosity_level=verbosity_level,
-                                                                              log_type=self.log_file.log_type)
+                                                                              log_type=dispatch_log_type)
 
                         # Extract timestamp for sorting
                         time_str = entry_payload.get('time', '0')
