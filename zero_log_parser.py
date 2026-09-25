@@ -1137,6 +1137,97 @@ class Gen2:
         }
 
     @classmethod
+    def mbb_system_information(cls, x):
+        """Type 0xfb "System Information". LOG_STRUCTURE.md documents this
+        as an identifier, VIN, serial numbers and firmware version, once
+        per log session, decoded here as a regular entry-stream payload
+        rather than a fixed file offset - the same data
+        the Gen3 header decode already reads via `get_version_and_header()`
+        for files where its own two candidate offsets validate, now
+        reachable through the entry stream instead.
+
+        Written by both MBB and BMS firmware under this same type id
+        with genuinely different payloads, confirmed against real
+        logs rather than assumed from the field names: MBB's copy
+        carries the vehicle VIN behind a 4-byte 'MBB\\0' self-identifier;
+        BMS's carries no VIN anywhere in the payload, a 'BMS\\0'
+        identifier instead, and its own board serial/firmware part
+        number in different field positions. Only the MBB shape is
+        decoded here. Gated on the payload's own identifier bytes, not
+        the file's log_type, so a genuinely-MBB 0xfb entry inside an
+        Unknown Type file still decodes without a separate file-level
+        check; a 'BMS\\0'-identified or unrecognized payload falls back
+        to the existing raw-hex report unchanged, matching
+        _entry_parsers()'s file-type-aware convention for 0x10/0x11
+        without needing log_type threaded in here too, since this entry
+        identifies its own writer directly.
+
+        Field offsets shift by one byte together (0 or +1, mirroring
+        the Gen3 header decode's own 0x29/0x2A search) depending on
+        firmware variant. A separate hash-style 'Firmware build' field
+        the Gen3 header decode also reads is deliberately not decoded
+        here: confirmed on 7 real files, its position drifts relative to
+        a preceding variable-length field whenever that field's raw
+        bytes need escape-byte unstuffing - a narrow, real gap, not
+        implemented rather than guessed at.
+        """
+        shift = None
+        for candidate_shift in (0, 1):
+            offset = 6 + candidate_shift
+            if bytes(x[offset:offset + 4]) == b'MBB\x00':
+                shift = candidate_shift
+                break
+        if shift is None:
+            return cls.unhandled_entry_format(0xfb, x)
+
+        try:
+            vin_candidate = BinaryTools.unpack_str(x, 34 + shift, count=vin_length)
+        except Exception:
+            return cls.unhandled_entry_format(0xfb, x)
+        if not is_valid_vin_checksum(vin_candidate):
+            return cls.unhandled_entry_format(0xfb, x)
+        vin = vin_candidate.upper()
+
+        structured_data = {'vin': vin}
+
+        try:
+            model = BinaryTools.unpack_str(x, 18 + shift, count=16)
+            structured_data['model'] = model if model and BinaryTools.is_printable(model) else 'Unknown'
+        except Exception:
+            structured_data['model'] = 'Unknown'
+
+        try:
+            serial = BinaryTools.unpack_str(x, 53 + shift, count=16)
+            structured_data['serial_number'] = serial if serial and BinaryTools.is_printable(serial) else 'Unknown'
+        except Exception:
+            structured_data['serial_number'] = 'Unknown'
+
+        try:
+            fw_version = BinaryTools.unpack_str(x, 85 + shift, count=16)
+            structured_data['firmware_version'] = fw_version if fw_version and BinaryTools.is_printable(fw_version) else 'Unknown'
+        except Exception:
+            structured_data['firmware_version'] = 'Unknown'
+
+        try:
+            structured_data['board_rev'] = BinaryTools.unpack('uint8', x, 94 + shift)
+        except Exception:
+            structured_data['board_rev'] = 'Unknown'
+
+        try:
+            structured_data['firmware_rev'] = BinaryTools.unpack('uint8', x, 96 + shift)
+        except Exception:
+            structured_data['firmware_rev'] = 'Unknown'
+
+        conditions = 'VIN: {vin}, Serial: {serial}, Firmware: {fw}'.format(
+            vin=vin, serial=structured_data['serial_number'], fw=structured_data['firmware_version'])
+
+        return {
+            'event': 'System Information',
+            'structured_data': structured_data,
+            'conditions': conditions,
+        }
+
+    @classmethod
     def bms_reflash(cls, x):
         # Extract binary data once
         revision = BinaryTools.unpack('uint8', x, 0x00)
@@ -2958,6 +3049,7 @@ class Gen2:
             0x52: lambda m: cls.vehicle_state_telemetry_tier(0x52, m),  # Type 82
             0x53: lambda m: cls.vehicle_state_telemetry_tier(0x53, m),  # Type 83
             0x54: cls.sensor_data,              # Type 84
+            0xfb: cls.mbb_system_information,   # Type 251
             0xfd: cls.debug_message
         }
         if log_type == LogFile.log_type_mbb:
