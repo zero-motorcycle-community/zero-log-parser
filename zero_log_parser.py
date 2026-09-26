@@ -3985,6 +3985,47 @@ class LogData(object):
                     sys_info['Board rev.'] = 'Unknown'
                     sys_info['Firmware build'] = 'Unknown'
 
+                # Prefer entry type 0xfb's own decode when it's available.
+                # The fixed offsets above read raw file bytes directly,
+                # with no concept of the entry-level byte-stuffing
+                # (unescape_block) every real entry decoder in this parser
+                # already accounts for; a literal 0xfe escape byte
+                # anywhere in the entry before a target offset silently
+                # shifts what gets read there, with no error and no
+                # degrade-to-'Unknown' - confirmed on 7 real files where
+                # this corrupted Board rev./Firmware rev. to 0/0.
+                # Gen2.mbb_system_information() reads the same
+                # already-unescaped payload parse_entry() builds for every
+                # other decoder, so it isn't exposed to this at all -
+                # reused directly here rather than duplicating its
+                # unescaping and shift-search logic. Only attempted when
+                # byte 0 is really 0xb2: that's the only case where entry
+                # 1 sits at address 0 (confirmed empirically - the other
+                # ring-buffer detection path, the 262144-byte
+                # \xa1\xa1\xa1\xa1 fallback, never has a live 0xfb entry
+                # findable this way). Falls back to the fixed-offset
+                # values above unchanged if byte 0 isn't 0xb2, if the
+                # entry there isn't really type 0xfb, or if
+                # mbb_system_information() itself declines (a BMS-side or
+                # unrecognized payload) - Firmware build is left as the
+                # fixed-offset method computed it either way, since the
+                # entry decoder doesn't read that field.
+                if log.raw()[0] == 0xb2:
+                    try:
+                        raw = log.raw()
+                        entry_length = raw[1]
+                        unescaped = BinaryTools.unescape_block(raw[2:entry_length])
+                        if len(unescaped) >= 6 and unescaped[0] == 0xfb:
+                            fb_entry = Gen2.mbb_system_information(unescaped[5:])
+                            fb_data = fb_entry.get('structured_data')
+                            if fb_data:
+                                sys_info['VIN'] = fb_data['vin']
+                                sys_info['Model'] = fb_data['model']
+                                sys_info['Board rev.'] = fb_data['board_rev']
+                                sys_info['Firmware rev.'] = fb_data['firmware_rev']
+                    except Exception:
+                        pass
+
             else:
                 # Legacy format - use original logic
                 vin_v0 = log.unpack_str(0x240, count=17)  # v0 (Gen2)
