@@ -2053,6 +2053,82 @@ class Gen2:
             'structured_data': structured_data
         }
 
+    # Entry type 0x4E: FST/Gen3 firmware build info, the same role as the
+    # classic MBB's already-decoded type 0x32 (Gen2.firmware_build_info):
+    # a build date/time string followed by a flash bank identifier
+    # ("banka"/"bankb", the same two literal values 0x32 and the MBB
+    # firmware image strings use). Payloads are
+    # 60 bytes (with a trailing build identifier after the bank field) or
+    # 58 bytes (without it) - never confirmed to occur past those, so both
+    # are gated exactly. Layout: the shared 6-byte prefix (see
+    # fst_entry_prefix), two u16 LE values at 6-7/8-9 of unconfirmed
+    # meaning, then a NUL-terminated ASCII date string starting at offset
+    # 10, in one of two formats seen (older C-style "Sep 20 2019
+    # 16:26:26", newer "2021-11-08_134947"), then zero padding, then
+    # "banka" or "bankb" (NUL-terminated), then - on the 60-byte form only
+    # - a short hex-shaped build identifier (NUL-terminated). Confirmed at
+    # full population scale: every one of 41 real MBB entries (37 of 60
+    # bytes, 4 of 58) parses a date and finds a bank string; of 1,030 raw
+    # entries of this type across all real logs checked (most of them
+    # marker-corrupted noise in the 131,328-byte BMS page format, the same
+    # class of artifact seen in
+    # 0x4B-0x4D), exactly these same 41 pass every gate below and 0 others
+    # do - the gates are self-identifying, no log_type check needed.
+    GEN3_BUILD_DATE_FORMATS = ('%b %d %Y %H:%M:%S', '%Y-%m-%d_%H%M%S')
+    GEN3_BUILD_BANK_RE = re.compile(rb'bank[ab]\x00')
+
+    @classmethod
+    def gen3_firmware_build_info(cls, x):
+        if len(x) not in (58, 60):
+            return cls.unhandled_entry_format(0x4e, x)
+
+        prefix = cls.fst_entry_prefix(x)
+        if prefix['subsecond_us'] > cls.FST_SUBSECOND_MAX_US:
+            return cls.unhandled_entry_format(0x4e, x)
+
+        date_end = x.find(b'\x00', 10)
+        if date_end == -1 or date_end == 10:
+            return cls.unhandled_entry_format(0x4e, x)
+        try:
+            date_str = bytes(x[10:date_end]).decode('ascii')
+        except UnicodeDecodeError:
+            return cls.unhandled_entry_format(0x4e, x)
+
+        build_time = None
+        for fmt in cls.GEN3_BUILD_DATE_FORMATS:
+            try:
+                build_time = datetime.strptime(date_str, fmt)
+                break
+            except ValueError:
+                continue
+        if build_time is None:
+            return cls.unhandled_entry_format(0x4e, x)
+
+        match = cls.GEN3_BUILD_BANK_RE.search(bytes(x[date_end:]))
+        if not match:
+            return cls.unhandled_entry_format(0x4e, x)
+        bank_start = date_end + match.start()
+        flash_bank = bytes(x[bank_start:bank_start + 5]).decode('ascii')
+
+        structured_data = dict(prefix)
+        structured_data['build_date'] = build_time.strftime(ZERO_TIME_FORMAT)
+        structured_data['flash_bank'] = flash_bank
+        after_bank = bytes(x[bank_start + 6:])
+        build_id_raw = after_bank.split(b'\x00')[0]
+        if build_id_raw and all(32 <= c < 127 for c in build_id_raw):
+            structured_data['build_id'] = build_id_raw.decode('ascii')
+        structured_data['raw_hex'] = bytes(x).hex()
+
+        conditions = f"Built {structured_data['build_date']}, {flash_bank}"
+        if 'build_id' in structured_data:
+            conditions += f", {structured_data['build_id']}"
+
+        return {
+            'event': 'Firmware Build Info',
+            'conditions': conditions,
+            'structured_data': structured_data
+        }
+
     # Entry types 0x4B/0x4C/0x4D: one record family, three sizes. A telemetry
     # sub-block widens by exactly 4 bytes per tier, and a 4-byte null-padded
     # ASCII state tag sits at a fixed offset relative to the end of that
@@ -3044,6 +3120,7 @@ class Gen2:
             0x4b: lambda m: cls.state_snapshot_dispatch(0x4b, m),  # Type 75
             0x4c: lambda m: cls.state_snapshot_dispatch(0x4c, m),  # Type 76
             0x4d: lambda m: cls.state_snapshot_dispatch(0x4d, m),  # Type 77
+            0x4e: cls.gen3_firmware_build_info,  # Type 78
             0x4f: cls.queue_full,               # Type 79
             0x51: cls.vehicle_state_telemetry,  # Type 81
             0x52: lambda m: cls.vehicle_state_telemetry_tier(0x52, m),  # Type 82
