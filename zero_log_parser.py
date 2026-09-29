@@ -677,8 +677,19 @@ class Gen2:
     #   nothing to hex-dump. mark_bytes_corrupted() sets two real fields,
     #   structured_data['bytes_corrupted'] and ['corrupted_byte_count']; text
     #   output renders them as a distinct tag via corrupted_span_display().
+    # - Field corrupted: a single decoded field (not the whole entry) whose
+    #   own source bytes overlap the page marker. The original bytes are gone, so the
+    #   value cannot be recovered or verified and is withheld rather than
+    #   shown. The entry's type and timestamp are
+    #   intact and every other field is trustworthy, so this is deliberately
+    #   not bytes_corrupted (that flag means the entry itself is
+    #   destroyed). The field's value is set to None (renders as an empty
+    #   cell in tabular output, `null` in JSON) and its name is recorded in
+    #   structured_data['corrupted_fields']; text output renders that list
+    #   as a distinct tag, in the same "{corrupted: ...}" style as the
+    #   entry-level tag above, via corrupted_fields_display().
     #
-    # Both tags are produced centrally by the txt emitter's
+    # All three tags are produced centrally by the txt emitter's
     # format_structured_data() (LogData.emit_zero_compatible_decoding), which
     # every decoder using these fields relies on rather than formatting its
     # own text. This is a text-output/structured_data convention only - it
@@ -696,6 +707,10 @@ class Gen2:
     def mark_bytes_corrupted(structured_data: dict, byte_count: int) -> None:
         structured_data['bytes_corrupted'] = True
         structured_data['corrupted_byte_count'] = byte_count
+
+    @staticmethod
+    def corrupted_fields_display(field_names) -> str:
+        return '{corrupted: %s}' % ', '.join(field_names)
 
     @classmethod
     def timestamp_from_event(cls, unescaped_block, use_local_time=True, timezone_offset=None):
@@ -2940,6 +2955,135 @@ class Gen2:
         }
 
     @classmethod
+    def _enumerate_structured_fields(cls, data, prefix=''):
+        """Every (dotted path, value) leaf pair in a decoder's
+        structured_data, excluding raw_hex (undecoded bytes are never a
+        corruption candidate, they are already marked undecoded). Path
+        convention: dot for a dict key, [i] for a list index."""
+        out = []
+        if isinstance(data, dict):
+            for k, v in data.items():
+                if k == 'raw_hex':
+                    continue
+                p = f'{prefix}.{k}' if prefix else str(k)
+                if isinstance(v, (dict, list)):
+                    out.extend(cls._enumerate_structured_fields(v, p))
+                else:
+                    out.append((p, v))
+        elif isinstance(data, list):
+            for i, v in enumerate(data):
+                p = f'{prefix}[{i}]'
+                if isinstance(v, (dict, list)):
+                    out.extend(cls._enumerate_structured_fields(v, p))
+                else:
+                    out.append((p, v))
+        return out
+
+    @classmethod
+    def _set_structured_field(cls, data, path, value):
+        """Navigate a dotted path as produced by _enumerate_structured_fields
+        and overwrite that one leaf value in place."""
+        parts = []
+        for part in path.split('.'):
+            if '[' in part:
+                key, idx = part[:part.index('[')], int(part[part.index('[') + 1:-1])
+                if key:
+                    parts.append(key)
+                parts.append(idx)
+            else:
+                parts.append(part)
+        node = data
+        for p in parts[:-1]:
+            node = node[p]
+        node[parts[-1]] = value
+
+    @classmethod
+    def _withhold_marker_corrupted_fields(cls, structured_data, entry_parser, buf, start, end, message_type):
+        """If any decoded (non-raw_hex) field's own source bytes overlap the
+        page marker, withhold that field's value instead of showing one the
+        marker may have altered - the original bytes are gone, so the value
+        cannot be recovered or verified. Detected with a perturbation test:
+        redecode the
+        entry's raw (still-escaped) bytes with the marker's own byte range
+        replaced by two different fillers (0x00, then 0xAA); any field whose
+        decoded value differs from the baseline under either filler had its
+        source bytes overwritten by the marker. Generic by construction - no
+        per-type field list to keep in sync as decoders change.
+
+        Mutates structured_data in place. Never sets bytes_corrupted /
+        corrupted_byte_count - those mean the entry's own type or header was
+        destroyed, a different and more severe condition; this is a same-entry,
+        per-field concern only.
+
+        Takes the raw buffer and this entry's own [start, end) span rather
+        than an already-sliced raw_escaped copy: the marker can straddle two
+        entries' boundary (up to 3 of its 4 bytes on either side belong to a
+        neighbor), so detection searches a window 3 bytes wider on each side
+        and clips each occurrence to this entry's own [start+2, end) range -
+        requiring the full 4-byte pattern to be locally contained within one
+        entry's own bytes silently missed these, found only by this fix's
+        own regression run over real logs."""
+        escaped_start = start + 2
+        raw_escaped = bytes(buf[escaped_start:end])
+        if not raw_escaped:
+            return
+        window_start = max(0, escaped_start - 3)
+        window = bytes(buf[window_start:end + 3])
+        marker_at = []
+        pos = window.find(cls.PAGE_MARKER)
+        while pos != -1:
+            abs_pos = window_start + pos
+            rel_start = max(0, abs_pos - escaped_start)
+            rel_end = min(len(raw_escaped), abs_pos + 4 - escaped_start)
+            if rel_end > rel_start:
+                marker_at.append((rel_start, rel_end))
+            pos = window.find(cls.PAGE_MARKER, pos + 1)
+        if not marker_at:
+            return
+
+        baseline_fields = dict(cls._enumerate_structured_fields(structured_data))
+        if not baseline_fields:
+            return
+
+        contaminated = set()
+        for filler in (0x00, 0xAA):
+            modified = bytearray(raw_escaped)
+            for rel_start, rel_end in marker_at:
+                modified[rel_start:rel_end] = bytes([filler]) * (rel_end - rel_start)
+            try:
+                modified_unescaped = BinaryTools.unescape_block(modified)
+            except Exception:
+                continue
+            if (len(modified_unescaped) < 4
+                    or bytes(modified_unescaped[0:4]) == cls.PAGE_MARKER
+                    or cls.type_from_block(modified_unescaped) != message_type):
+                # The perturbation itself pushed this entry into looking
+                # type-destroyed, or changed its own type id - a more severe
+                # effect than a single field changing value. Not observed in
+                # the real logs checked (0 of ~75,000 marker-touched
+                # entries), but handled conservatively rather than assumed
+                # impossible: skip this filler run rather than compare
+                # fields across two different decodes of two different types.
+                continue
+            try:
+                modified_entry = entry_parser(modified_unescaped[0x05:])
+            except Exception:
+                # Not testable under this filler (the real logs checked
+                # had zero such cases too); skip rather than guess.
+                continue
+            modified_fields = dict(cls._enumerate_structured_fields(
+                modified_entry.get('structured_data') or {}))
+            _missing = object()
+            for path in set(baseline_fields) | set(modified_fields):
+                if baseline_fields.get(path, _missing) != modified_fields.get(path, _missing):
+                    contaminated.add(path)
+
+        if contaminated:
+            for path in contaminated:
+                cls._set_structured_field(structured_data, path, None)
+            structured_data['corrupted_fields'] = sorted(contaminated)
+
+    @classmethod
     def _sort_timestamp_for(cls, entry):
         """Same time_str -> sort_timestamp logic
         LogData._collect_and_process_entries' REV0/REV1/REV3 loop already
@@ -3075,6 +3219,10 @@ class Gen2:
             except Exception:
                 entry = cls.unhandled_entry_format(message_type, message)
                 entry['event'] = 'Exception caught: ' + entry['event']
+
+            if entry_parser and entry.get('structured_data') is not None:
+                cls._withhold_marker_corrupted_fields(
+                    entry['structured_data'], entry_parser, buf, start, start + length, message_type)
 
             entry['time'] = cls.timestamp_from_event(unescaped_block, timezone_offset=timezone_offset)
             entry['original_timestamp'] = BinaryTools.unpack('uint32', unescaped_block, 0x01)
@@ -4114,9 +4262,12 @@ class LogData(object):
                             # Not str(value): print_value_tabular() already
                             # documents that it renders None as an empty
                             # cell. Pre-stringifying here turned every
-                            # None-valued field (debug_message()'s SOC path,
+                            # None-valued field, including a marker-
+                            # corrupted one (Gen2._withhold_marker_corrupted_fields)
+                            # or one a decoder simply never applies to this
+                            # entry (debug_message()'s SOC path,
                             # battery_status()'s precharge_percent outside
-                            # its one applicable event) into the literal
+                            # its one applicable event), into the literal
                             # text "None" before print_value_tabular() ever
                             # saw it, defeating that documented contract.
                             value,
@@ -4321,18 +4472,22 @@ class LogData(object):
                 no separate label; bytes_corrupted/corrupted_byte_count
                 (Gen2.mark_bytes_corrupted's real, machine-readable fields)
                 collapse into one bracketed corruption tag instead of two
-                key-value pairs. See Gen2's standing-convention comment above
-                its undecoded_hex_display/corrupted_span_display/
-                mark_bytes_corrupted definitions.
+                key-value pairs; corrupted_fields
+                (Gen2._withhold_marker_corrupted_fields) collapses into one
+                bracketed corruption tag, in the same style, instead of one
+                None-valued pair per withheld field. See Gen2's
+                standing-convention comment above its undecoded_hex_display/
+                corrupted_span_display/mark_bytes_corrupted/
+                corrupted_fields_display definitions.
 
-                A field whose value is None (a handful of decoders emit one
-                when their own source data does not apply to this specific
-                entry, e.g. debug_message()'s SOC path when the message
-                carries no current reading, battery_status()'s
-                precharge_percent outside the one event it is meaningful
-                for, or bms_discharge_level()'s mode when the byte does not
-                match one of its three known bike states) is omitted
-                entirely, the same way a field a decoder
+                A field whose value is None for any other reason (a handful
+                of decoders emit one when their own source data does not
+                apply to this specific entry, e.g. debug_message()'s SOC
+                path when the message carries no current reading,
+                battery_status()'s precharge_percent outside the one event
+                it is meaningful for, or bms_discharge_level()'s mode when
+                the byte does not match one of its three known bike states)
+                is likewise omitted entirely, the same way a field a decoder
                 simply never included would be, rather than printed as the
                 literal text "None" or "NoneA"/"NoneV"/etc. once a unit
                 suffix is appended. Recurses into nested dicts (e.g.
@@ -4341,9 +4496,12 @@ class LogData(object):
                 if not structured_data:
                     return ""
 
+                corrupted_fields = structured_data.get('corrupted_fields') or []
                 formatted_pairs = []
                 for key, value in structured_data.items():
-                    if key in ('bytes_corrupted', 'corrupted_byte_count'):
+                    if key in ('bytes_corrupted', 'corrupted_byte_count', 'corrupted_fields'):
+                        continue
+                    if key in corrupted_fields:
                         continue
                     if value is None:
                         continue
@@ -4356,6 +4514,8 @@ class LogData(object):
                 if structured_data.get('bytes_corrupted'):
                     formatted_pairs.append(
                         Gen2.corrupted_span_display(structured_data.get('corrupted_byte_count', 0)))
+                if corrupted_fields:
+                    formatted_pairs.append(Gen2.corrupted_fields_display(corrupted_fields))
 
                 return ", ".join(formatted_pairs)
 
