@@ -858,6 +858,53 @@ class Gen2:
         }
 
     @classmethod
+    def bms_storage_stats(cls, x):
+        """Type 0x0F: BMS long-term-storage (LTSM) stats record, 10 bytes.
+
+        Written roughly every 12 hours while the pack sits in long-term
+        storage mode, directly after the firmware's own "LTSM stats: ...
+        Num bal res active: N" debug string and directly before a type 0x3
+        discharge-level record. Full-dataset evidence:
+        analysis/type_0xF_decode.md.
+
+        Decodes only what was confirmed across the whole population:
+        - byte 2: balance resistors active, equal to the preceding LTSM
+          string's "Num bal res active" value in every testable record
+        - bytes 3-4 / 5-6: low / high cell voltage (mV), identical to the
+          paired 0x3 record's own low/high cell fields in every testable
+          record
+        - bytes 7-8: uint16 high minus low (mV), always exactly H - L
+        - byte 9: BMS temperature (degrees C), identical to the paired
+          0x3 record's BMS temperature byte
+        Bytes 0 and 1 (each always 1-28, never equal to each other) are
+        not identified and stay in raw_hex with the rest of the payload.
+        Any other length falls back to unhandled_entry_format().
+        """
+        if len(x) != 10:
+            return cls.unhandled_entry_format(0x0f, x)
+
+        low_mv = BinaryTools.unpack('uint16', x, 0x03)
+        high_mv = BinaryTools.unpack('uint16', x, 0x05)
+        structured_data = {
+            'balance_resistors_active': BinaryTools.unpack('uint8', x, 0x02),
+            'voltage_low_cell_volts': low_mv / 1000.0,
+            'voltage_high_cell_volts': high_mv / 1000.0,
+            'voltage_balance_mv': BinaryTools.unpack('uint16', x, 0x07),
+            'bms_temp_celsius': BinaryTools.unpack('uint8', x, 0x09),
+            'raw_hex': bytes(x).hex(),
+        }
+        return {
+            'event': 'BMS Long Term Storage Stats',
+            'conditions': 'Bal res active: {R}, L:{L:4.3f}V, H:{H:4.3f}V, B:{B:03d}mV, BT:{BT:03d}C'.format(
+                R=structured_data['balance_resistors_active'],
+                L=structured_data['voltage_low_cell_volts'],
+                H=structured_data['voltage_high_cell_volts'],
+                B=structured_data['voltage_balance_mv'],
+                BT=structured_data['bms_temp_celsius']),
+            'structured_data': structured_data
+        }
+
+    @classmethod
     def bms_charge_event_fields(cls, x):
         return {
             'AH': trunc(BinaryTools.unpack('uint32', x, 0x06) / 1000000.0),
@@ -2692,6 +2739,7 @@ class Gen2:
             0x0b: "BMS SOC Adjusted for Voltage",
             0x0d: "BMS Current Sensor Zeroed",
             0x0e: "BMS Unknown Type 14",
+            0x0f: "BMS Long Term Storage Stats",
             0x10: "BMS Hibernate State",
             0x11: "BMS Chassis Isolation Fault",
             0x12: "BMS Reflash",
@@ -2796,6 +2844,7 @@ class Gen2:
             0x0b: cls.bms_soc_adj_voltage,
             0x0d: cls.bms_curr_sens_zero,
             0x0e: BinaryTools.bms_unknown_type_14,
+            0x0f: cls.bms_storage_stats,
             0x10: cls.bms_state,
             0x11: cls.bms_isolation_fault,
             0x12: cls.bms_reflash,

@@ -298,6 +298,20 @@ Offset | Length | Contents
 ------ | :----: | --------
 0x00   | 3      | Unknown data (displayed as hex in parser)
 
+### `0xf` - BMS Long Term Storage Stats
+Fixed 10 bytes. Logged about every 12 hours in long-term storage mode, right
+after the "LTSM stats: ..." debug string and right before a `0x3` discharge
+level entry that repeats its cell voltages and BMS temperature.
+Offset | Length | Contents
+------ | :----: | --------
+0x00   | 1      | Unknown (always 1-28)
+0x01   | 1      | Unknown (always 1-28, never equal to 0x00)
+0x02   | 1      | Balance resistors active (matches "Num bal res active" in the LTSM string)
+0x03   | 2      | L low cell (mV)
+0x05   | 2      | H high cell (mV)
+0x07   | 2      | B balance = H - L (mV)
+0x09   | 1      | BT BMS temp (°C)
+
 ### `0x10` - BMS Hibernate
 Offset | Length | Contents
 ------ | :----: | --------
