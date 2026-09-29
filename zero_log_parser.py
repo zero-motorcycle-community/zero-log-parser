@@ -2546,61 +2546,69 @@ class Gen2:
 
     @classmethod
     def vehicle_state_telemetry(cls, x):
-        """Parse Type 81 (0x51) - Vehicle State Telemetry (52-68 bytes)
+        """Parse Type 81 (0x51) - Vehicle State Telemetry (64 or 68 bytes).
 
-        Real payloads come in two lengths, 64 and 68 bytes (roughly even split
-        in the corpus); the extra 4 bytes at the end of the 68-byte form are
-        never read below (highest offset used is 51), so the gate only needs
-        to guarantee that byte is present, not that both forms' trailing data
-        is. See analysis/vst_64byte_fix.md.
+        This function used to read odometer_meters/odometer_km from bytes
+        0-3 and soc_raw/soc_percent from bytes 4-7. Both are wrong: bytes
+        0-3 are the entry's own sub-second timestamp fraction and bytes 4-5
+        are the same sequence/marker prefix every FST entry type shares
+        (Gen2.fst_entry_prefix); bytes 6-7 are always zero. No odometer or
+        state-of-charge value was found anywhere else in this payload
+        either (see analysis/vst_field_fix.md, which also checked bytes
+        10-11, previously read as part of a bogus "ambient_temperature_raw"
+        u32 at offset 8: byte 8-9 are always zero, byte 11 is always zero,
+        and byte 10 is a 7-value enum that correlates with vehicle_state
+        and varies within a single VIN's own files, ruling it out as a
+        per-vehicle hardware ID as well as a temperature reading).
+        Confirmed: this entry type does not carry odometer or SOC data.
+        Removed rather than repointed; kept in raw_hex like every other
+        unidentified byte in this payload.
 
-        Optimized Gen2 parser - generates structured data directly from binary.
-        Returns ProcessedLogEntry with both human-readable conditions and structured JSON data.
+        Kept, corrected: temperature_1..4_celsius are real (see
+        vst_field_fix.md's per-VIN smoothness, physical-range and seasonal
+        checks), but the previous code read them at bytes 48-51 - the real
+        readings sit at a 4-byte stride, 48/52/56/60 (temp1 happened to
+        already be right); the previous temp2-4 read the zero-filled gap
+        bytes between them, matching the earlier finding that they were
+        zero in 99.97% of real entries.
+
+        Byte 5 (marker) is exposed raw and unlabeled, same as every other
+        FST entry type - not confirmed to mean anything, including the
+        "UTC offset" idea floated for it, which remains open.
+
+        Real payloads are 64 or 68 bytes (roughly even split); anything
+        else, including the 4-68 byte stray lengths seen in ~0.03% of raw
+        entries, falls back to the existing raw-hex report - consistent
+        with the length gates in state_snapshot/vehicle_state_telemetry_tier,
+        and with how little those stray lengths agree with any real shape.
         """
-        if len(x) < 52:
+        if len(x) not in (64, 68):
             return cls.unhandled_entry_format(0x51, x)
 
-        # Extract vehicle state string (bytes 35-38)
-        state_bytes = x[35:39]
-        state = state_bytes.rstrip(b'\x00').decode('ascii', errors='ignore')
+        tag_bytes = bytes(x[35:39])
+        state = tag_bytes.rstrip(b'\x00').decode('ascii', errors='replace')
+        if state not in cls.TELEMETRY_TAGS or tag_bytes != state.encode('ascii').ljust(4, b'\x00'):
+            return cls.unhandled_entry_format(0x51, x)
 
-        # Decode key telemetry values using BinaryTools.unpack()
-        odometer_m = BinaryTools.unpack('uint32', x, 0)      # Distance in meters
-        soc_raw = BinaryTools.unpack('uint32', x, 4)         # State of charge raw
-        ambient_temp_raw = BinaryTools.unpack('uint32', x, 8) # Ambient temperature raw
+        prefix = cls.fst_entry_prefix(x)
+        if prefix['subsecond_us'] > cls.FST_SUBSECOND_MAX_US:
+            return cls.unhandled_entry_format(0x51, x)
 
-        # Temperature values are at bytes 48-63 as single bytes
-        temp1 = BinaryTools.unpack('uint8', x, 48) if len(x) > 48 else 0  # Temperature 1 (°C)
-        temp2 = BinaryTools.unpack('uint8', x, 49) if len(x) > 49 else 0  # Temperature 2 (°C)
-        temp3 = BinaryTools.unpack('uint8', x, 50) if len(x) > 50 else 0  # Temperature 3 (°C)
-        temp4 = BinaryTools.unpack('uint8', x, 51) if len(x) > 51 else 0  # Temperature 4 (°C)
+        temp1 = BinaryTools.unpack('uint8', x, 48)
+        temp2 = BinaryTools.unpack('uint8', x, 52)
+        temp3 = BinaryTools.unpack('uint8', x, 56)
+        temp4 = BinaryTools.unpack('uint8', x, 60)
 
-        # Convert and calculate derived values
-        odometer_km = odometer_m // 1000  # Convert meters to km
-        soc_percent = max(0, min(100, int((soc_raw - 200) / 6.0)))  # Estimate SOC percentage
-        ambient_temp_celsius = int(ambient_temp_raw / 1000) if ambient_temp_raw > 1000 else ambient_temp_raw
+        structured_data = {'vehicle_state': state}
+        structured_data.update(prefix)
+        structured_data['temperature_1_celsius'] = temp1
+        structured_data['temperature_2_celsius'] = temp2
+        structured_data['temperature_3_celsius'] = temp3
+        structured_data['temperature_4_celsius'] = temp4
+        structured_data['raw_hex'] = bytes(x).hex()
 
-        # Create structured data
-        structured_data = {
-            'vehicle_state': state,
-            'odometer_meters': odometer_m,
-            'odometer_km': odometer_km,
-            'soc_raw': soc_raw,
-            'soc_percent': soc_percent,
-            'ambient_temperature_raw': ambient_temp_raw,
-            'ambient_temperature_celsius': ambient_temp_celsius,
-            'temperature_1_celsius': temp1,
-            'temperature_2_celsius': temp2,
-            'temperature_3_celsius': temp3,
-            'temperature_4_celsius': temp4
-        }
-
-        # Generate human-readable conditions with units
         conditions = (
             f"State: {state}, "
-            f"PackSOC: {soc_percent}%, "
-            f"Odo: {odometer_km}km, "
-            f"AmbTemp: {ambient_temp_celsius}°C, "
             f"Temp1: {temp1}°C, Temp2: {temp2}°C, "
             f"Temp3: {temp3}°C, Temp4: {temp4}°C"
         )
