@@ -4111,7 +4111,15 @@ class LogData(object):
                             entry.log_level,
                             entry.event,
                             key,
-                            str(value),
+                            # Not str(value): print_value_tabular() already
+                            # documents that it renders None as an empty
+                            # cell. Pre-stringifying here turned every
+                            # None-valued field (debug_message()'s SOC path,
+                            # battery_status()'s precharge_percent outside
+                            # its one applicable event) into the literal
+                            # text "None" before print_value_tabular() ever
+                            # saw it, defeating that documented contract.
+                            value,
                             entry.uninterpreted
                         ]
                         write_row([print_value_tabular(x) for x in row_values])
@@ -4315,13 +4323,29 @@ class LogData(object):
                 collapse into one bracketed corruption tag instead of two
                 key-value pairs. See Gen2's standing-convention comment above
                 its undecoded_hex_display/corrupted_span_display/
-                mark_bytes_corrupted definitions."""
+                mark_bytes_corrupted definitions.
+
+                A field whose value is None (a handful of decoders emit one
+                when their own source data does not apply to this specific
+                entry, e.g. debug_message()'s SOC path when the message
+                carries no current reading, battery_status()'s
+                precharge_percent outside the one event it is meaningful
+                for, or bms_discharge_level()'s mode when the byte does not
+                match one of its three known bike states) is omitted
+                entirely, the same way a field a decoder
+                simply never included would be, rather than printed as the
+                literal text "None" or "NoneA"/"NoneV"/etc. once a unit
+                suffix is appended. Recurses into nested dicts (e.g.
+                charger_info's own chargers list) via format_structured_value,
+                so this applies at any depth."""
                 if not structured_data:
                     return ""
 
                 formatted_pairs = []
                 for key, value in structured_data.items():
                     if key in ('bytes_corrupted', 'corrupted_byte_count'):
+                        continue
+                    if value is None:
                         continue
                     if key == 'raw_hex':
                         formatted_pairs.append(format_structured_value(key, value))
