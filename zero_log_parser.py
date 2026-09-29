@@ -1907,6 +1907,110 @@ class Gen2:
             'structured_data': structured_data
         }
 
+    # Entry types 0x4B/0x4C/0x4D, BMS side: a second, unrelated record family
+    # that shares these three type codes with the MBB-side "State Snapshot"
+    # family above but is a different layout entirely (different lengths,
+    # no state tag, no ASCII vocabulary anywhere - confirmed in
+    # analysis/bms_fst_type_family_recheck.md). This layout was reversed
+    # from an external, unverified lead (zerologs.bike) and confirmed at
+    # full population scale before being implemented here - see
+    # analysis/bms_fst_offset_shift_test.md for the full derivation and
+    # every plausibility check.
+    #
+    # One cell-telemetry field block, following the shared 6-byte FST
+    # prefix (fst_entry_prefix) and one further, still-unidentified byte,
+    # whose start shifts by exactly 4 bytes per tier:
+    #   +0   u16 LE  low cell voltage, mV
+    #   +2   u16 LE  unloaded (open-circuit) low cell voltage, mV - only
+    #                populated while the pack is at rest; reads 0 otherwise
+    #   +4   u16 LE  high cell voltage, mV
+    #   +6   u8      state of charge, 0-100%
+    #   +7   i32 LE  battery current, mA (negative = charging)
+    #  +25   u24 LE  pack voltage, mV
+    #
+    # A byte at +30 was previously read as BMS temperature; dropped
+    # 2026-09-24 (analysis/bms_fst_offset_shift_test.md correction section)
+    # - the external source that suggested it retracted the reading and no
+    # independent confirmation could be found in this file set. The byte
+    # stays in raw_hex, undecoded.
+    # message_type -> (block shift, valid payload lengths for this tier)
+    BMS_CELL_TELEMETRY_TIERS = {
+        0x4b: (0, (43, 45)),
+        0x4c: (4, (61, 63)),
+        0x4d: (8, (69, 71)),
+    }
+    BMS_CELL_TELEMETRY_FIELD_BASE = 14  # x-offset of the block's first byte for 0x4B
+
+    @classmethod
+    def bms_cell_telemetry(cls, message_type, x):
+        """Types 0x4B/0x4C/0x4D, BMS side - cell telemetry snapshot.
+
+        Decodes low/unloaded-low/high cell voltage, state of charge,
+        battery current and pack voltage, plus the shared 6-byte prefix.
+        Every other byte, including the one previously read as a BMS
+        temperature (see analysis/bms_fst_offset_shift_test.md's
+        2026-09-24 correction), is unidentified and is kept as-is in
+        raw_hex rather than guessed at. A payload whose length is not one
+        of the two confirmed lengths for its tier, or whose sub-second
+        prefix value is out of range, falls back to the raw-hex report
+        unhandled_entry_format() already gives these types.
+        """
+        shift, valid_lengths = cls.BMS_CELL_TELEMETRY_TIERS[message_type]
+        if len(x) not in valid_lengths:
+            return cls.unhandled_entry_format(message_type, x)
+
+        prefix = cls.fst_entry_prefix(x)
+        if prefix['subsecond_us'] > cls.FST_SUBSECOND_MAX_US:
+            return cls.unhandled_entry_format(message_type, x)
+
+        base = cls.BMS_CELL_TELEMETRY_FIELD_BASE + shift
+        voltage_low = BinaryTools.unpack('uint16', x, base + 0)
+        voltage_unloaded = BinaryTools.unpack('uint16', x, base + 2)
+        voltage_high = BinaryTools.unpack('uint16', x, base + 4)
+        soc = BinaryTools.unpack('uint8', x, base + 6)
+        current_ma = BinaryTools.unpack('int32', x, base + 7)
+        pack_voltage_mv = int.from_bytes(bytes(x[base + 25:base + 28]), 'little')
+
+        structured_data = dict(prefix)
+        structured_data.update({
+            'voltage_low_cell_volts': voltage_low / 1000.0,
+            'voltage_unloaded_cell_volts': voltage_unloaded / 1000.0,
+            'voltage_high_cell_volts': voltage_high / 1000.0,
+            'state_of_charge_percent': soc,
+            'battery_current_amps': current_ma / 1000.0,
+            'pack_voltage_volts': pack_voltage_mv / 1000.0,
+        })
+
+        structured_data['raw_hex'] = bytes(x).hex()
+
+        conditions = (
+            f"SOC:{soc}%, Vlow:{voltage_low}mV, Vhigh:{voltage_high}mV, "
+            f"Vpack:{structured_data['pack_voltage_volts']:.3f}V, "
+            f"I:{structured_data['battery_current_amps']:.3f}A"
+        )
+
+        return {
+            'event': 'BMS Cell Telemetry',
+            'conditions': conditions,
+            'structured_data': structured_data
+        }
+
+    @classmethod
+    def state_snapshot_dispatch(cls, message_type, x):
+        """Types 0x4B/0x4C/0x4D dispatch: try the MBB-side State Snapshot
+        shape first (state_snapshot), then the BMS-side cell telemetry
+        shape (bms_cell_telemetry). The two never overlap (state_snapshot's
+        lengths are 46/77/89, bms_cell_telemetry's are 43/45, 61/63, 69/71 -
+        confirmed disjoint in analysis/bms_fst_type_family_recheck.md), so
+        this changes nothing for any entry that already decoded as a State
+        Snapshot; it only adds a second real decode for the shapes that
+        previously fell through both checks to the raw-hex fallback.
+        """
+        result = cls.state_snapshot(message_type, x)
+        if result.get('event') == 'State Snapshot':
+            return result
+        return cls.bms_cell_telemetry(message_type, x)
+
     # Entry types 0x52 and 0x53: the medium and large tiers of the family
     # whose small tier is 0x51 (vehicle_state_telemetry). Same head layout as
     # 0x51 and as 0x4B-0x4D: the shared 6-byte prefix, then a block that
@@ -2719,9 +2823,9 @@ class Gen2:
             0x3c: cls.disarmed_status,
             0x3d: cls.contactor_closed_or_precharge_failed,
             0x48: cls.charger_info,             # Type 72
-            0x4b: lambda m: cls.state_snapshot(0x4b, m),  # Type 75
-            0x4c: lambda m: cls.state_snapshot(0x4c, m),  # Type 76
-            0x4d: lambda m: cls.state_snapshot(0x4d, m),  # Type 77
+            0x4b: lambda m: cls.state_snapshot_dispatch(0x4b, m),  # Type 75
+            0x4c: lambda m: cls.state_snapshot_dispatch(0x4c, m),  # Type 76
+            0x4d: lambda m: cls.state_snapshot_dispatch(0x4d, m),  # Type 77
             0x4f: cls.queue_full,               # Type 79
             0x51: cls.vehicle_state_telemetry,  # Type 81
             0x52: lambda m: cls.vehicle_state_telemetry_tier(0x52, m),  # Type 82
