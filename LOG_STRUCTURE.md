@@ -33,8 +33,8 @@ Based on JavaScript parser analysis, the following enhancements have been implem
 ### Enhanced Message Type Support
 - **0x05**: BMS Unknown Type 5 - now displays raw hex data
 - **0x0e**: BMS Unknown Type 14 - now displays raw hex data  
-- **0x1c**: MBB Unknown Type 28 - now displays raw hex data
-- **0x26**: MBB Unknown Type 38 - now displays raw hex data
+- **0x1c**: BMS Disable - Low Bat (decoded, see below)
+- **0x26**: High Mot/Ctrl (decoded, see below)
 - **0x37**: MBB BT RX Buffer Overflow - now properly decoded
 
 ### Enhanced BMS Discharge Decoder (0x03)
@@ -341,32 +341,41 @@ Offset | Length | Contents
 0x05   | 4      | Switched mV
 0x09   | 1      | Duty cycle %
 
-### `0x1c` - MBB Unknown Type 28 (Implemented)
-**Parser status**: Now implemented with raw hex display.
+### `0x1c` - BMS Disable - Low Bat
 Offset | Length | Contents
 ------ | :----: | --------
-0x00   | 8      | Unknown data (displayed as hex in parser)
+0x00   | 4      | pack sum, mV (uint32)
+0x04   | 1      | capacity, % (uint8)
+0x05   | 1      | module number
+0x06   | 2      | status (uint16)
 
-### `0x1e` - MBB unknown
-Offset | Length | Contents
------- | :----: | --------
-0x00   | 4      | ???
+*Source: the classic MBB firmware's own event-log renderer and log writer (MY17 MBB image 75-08036-40), checked against the full classic MBB population with the real entry walker; see `analysis/mbb_firmware_strings.md`.*
 
-### `0x1f` - MBB unknown
+### `0x1e` - BMS Disable - High Temp
 Offset | Length | Contents
 ------ | :----: | --------
-0x00   | 4      | ???
+0x00   | 1      | pack temp, degrees C (int8; -100 = invalid thermistor)
+0x01   | 1      | module number
+0x02   | 2      | status (uint16)
 
-### `0x20` - MBB unknown
-Offset | Length | Contents
------- | :----: | --------
-0x00   | 3      | ???
+### `0x1f` - BMS Disable - Low Temp
+Same layout as `0x1e`.
 
-### `0x26` - MBB Unknown Type 38 (Implemented)
-**Parser status**: Now implemented with raw hex display.
+### `0x20` - Batt Temp
 Offset | Length | Contents
 ------ | :----: | --------
-0x00   | 6      | Unknown data (displayed as hex in parser)
+0x00   | 1      | state: `0`=Batt Temp Okay, `1`/`2`=Batt High Temp Stage 1/2, `3`=Batt Low Temp (other values: no name, raw fallback)
+0x01   | 1      | pack temp, degrees C (int8)
+0x02   | 1      | module number
+
+*A `0x1e`/`0x1f` entry is usually followed in the same second by a `0x20` High Temp Stage 2 / Low Temp entry carrying the same pack temp and module.*
+
+### `0x26` - High Mot/Ctrl
+Offset | Length | Contents
+------ | :----: | --------
+0x00   | 2      | motor temp, degrees C (uint16)
+0x02   | 2      | controller temp, degrees C (uint16)
+0x04   | 2      | not read by the firmware renderer; kept in `raw_hex`
 
 ### `0x28` - battery CAN link up
 Offset | Length | Contents
@@ -450,10 +459,26 @@ Offset | Length | Contents
 0x00   | 1      | state
 0x01   | 1      | `0x01`=key switch, `0x04`=onboard charger
 
-### `0x35` - MBB unknown
+### `0x35` - Exceeded Max Charge Amps
+Two forms, both handled by the firmware renderer's own length branch.
+
+5 bytes:
+
 Offset | Length | Contents
 ------ | :----: | --------
-0x00   | 5      | ???
+0x00   | 1      | module number
+0x01   | 1      | amps exceeded (int8)
+0x02   | 1      | seconds exceeded
+0x03   | 2      | amps at log (int16; charging current is negative)
+
+6 bytes:
+
+Offset | Length | Contents
+------ | :----: | --------
+0x00   | 1      | module number
+0x01   | 2      | amps exceeded (int16)
+0x03   | 1      | seconds exceeded
+0x04   | 2      | amps at log (int16)
 
 ### `0x36` - Sevcon power state
 Offset | Length | Contents
@@ -499,10 +524,35 @@ Offset | Length | Contents
 0x15   | 2      | ambient temperature
 0x17   | 4      | odometer
 
-### `0x3d` - battery module contactor closed
+### `0x3d` - two forms by length
+
+`0x3d` carries two different events depending on firmware era, told apart
+by payload length. Both are real: 4,681 entries in the file set are the
+1-byte form, almost all from 2013 model year bikes; the rest are the
+4-byte form.
+
+**1 byte - Battery module N contactor closed** (early firmware, 2013
+model year bikes)
+
 Offset | Length | Contents
 ------ | :----: | --------
-0x00   | 1      | module number
+0x00   | 1      | module number (uint8)
+
+This is the original upstream reading, unchanged. It typically follows a
+"Module N FETs are now Closed" / "Contactor took N ms to close" debug
+string.
+
+**4 bytes - Sevcon Failed To Fully Precharge**
+
+Offset | Length | Contents
+------ | :----: | --------
+0x00   | 4      | controller capacitor voltage reached, mV (uint32)
+
+The value is the same firmware quantity `0x33` logs at offset `0x0e`
+(vcap), logged when the precharge percentage stays under 98%. Before this
+was found, every `0x3d` entry (both forms) was misread as the 1-byte
+module-number event, which gave 4-byte entries nonsense like "Battery
+module 233 contactor closed".
 
 ### `0x3e` - cell voltages
 Offset | Length | Contents

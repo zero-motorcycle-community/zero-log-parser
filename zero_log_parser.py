@@ -447,24 +447,6 @@ class BinaryTools:
         }
 
     @classmethod
-    def mbb_unknown_type_28(cls, x):
-        """MBB Unknown Type 28 - raw hex display"""
-        hex_data = ' '.join(f'{b:02x}' for b in x[:min(16, len(x))])
-        return {
-            'event': 'MBB Unknown Type 28',
-            'conditions': f'Unknown: {hex_data}'
-        }
-
-    @classmethod
-    def mbb_unknown_type_38(cls, x):
-        """MBB Unknown Type 38 - raw hex display"""
-        hex_data = ' '.join(f'{b:02x}' for b in x[:min(16, len(x))])
-        return {
-            'event': 'MBB Unknown Type 38',
-            'conditions': f'Unknown: {hex_data}'
-        }
-
-    @classmethod
     def mbb_bt_rx_buffer_overflow(cls, x):
         """MBB BT RX Buffer Overflow"""
         hex_data = ' '.join(f'{b:02x}' for b in x[:min(16, len(x))])
@@ -2252,6 +2234,16 @@ class Gen2:
             'conditions': legacy_conditions  # LEGACY: For backward compatibility
         }
 
+    # Classic (REV0/REV1) MBB entry types named by the MBB firmware's own
+    # event-log renderer: the "dumpall" console decoder in the MY17 MBB image
+    # 75-08036-40 (switch on entry type, default "ERROR: No such event: %d").
+    # Field offsets, sizes, signedness and order below are the renderer's own
+    # reads, taken from the disassembly; payload lengths are the log writer's
+    # own immediate lengths. Every layout was re-checked against the full
+    # classic MBB population through the real entry walker. Evidence:
+    # analysis/mbb_firmware_strings.md. Any length the firmware does not
+    # write falls back to unhandled_entry_format(), exactly as before.
+
     @classmethod
     def battery_contactor_closed(cls, x):
         # Extract binary data once
@@ -2270,6 +2262,182 @@ class Gen2:
             'event': 'Battery module {module:02} contactor closed'.format(module=module_number),
             'structured_data': structured_data,
             'conditions': None  # No legacy conditions needed for this simple event
+        }
+
+    @classmethod
+    def contactor_closed_or_precharge_failed(cls, x):
+        """Type 0x3d carries two different events depending on firmware era,
+        told apart by payload length:
+        - 1 byte: "Battery module N contactor closed" (module number), the
+          original upstream reading. Found in early (2013 model year) MBB
+          logs, values 0/1, typically right after a "Module N FETs are now
+          Closed" / "Contactor took N ms to close" debug string. Decoded
+          by battery_contactor_closed(), unchanged.
+        - 4 bytes: "Sevcon Failed To Fully Precharge", see
+          sevcon_precharge_failed().
+        Any other length falls back to unhandled_entry_format()."""
+        if len(x) == 1:
+            return cls.battery_contactor_closed(x)
+        return cls.sevcon_precharge_failed(x)
+
+    @classmethod
+    def sevcon_precharge_failed(cls, x):
+        """Type 0x3d: "Sevcon Failed To Fully Precharge (%d mV). Restarting
+        Sevcon.", 4 bytes, one uint32 in mV.
+
+        The value is the controller capacitor voltage actually reached when
+        the attempt was abandoned, not a shortfall: the writer logs the same
+        firmware global that the 0x33 module-status writer stores at its
+        offset 0x0e (decoded there as capacitor_voltage_volts, "vcap"), and
+        the failure test is 100 * that value / target < 98 percent.
+        Before this, every 0x3d entry was read as the 1-byte module-number
+        event, which gave 4-byte entries nonsense like "Battery module 233
+        contactor closed".
+        """
+        if len(x) != 4:
+            return cls.unhandled_entry_format(0x3d, x)
+        capacitor_volt = convert_mv_to_v(BinaryTools.unpack('uint32', x, 0x00))
+        return {
+            'event': 'Sevcon Failed To Fully Precharge',
+            'structured_data': {
+                'capacitor_voltage_volts': capacitor_volt,
+            },
+            'conditions': 'vcap: {vcap:.3f}V. Restarting Sevcon.'.format(vcap=capacitor_volt),
+            # Explicit override: determine_log_level() would otherwise read
+            # 'FAILED' in the event name and call this ERROR, a side effect
+            # of the renaming rather than a deliberate severity choice. Its
+            # sibling event, "Precharge Decay Too Steep. Restarting
+            # Sevcon.", renders INFO; WARNING is the closest real level to
+            # that for an abnormal-but-recovered condition.
+            'log_level': 'WARNING',
+        }
+
+    @classmethod
+    def bms_disable_low_bat(cls, x):
+        """Type 0x1c: "BMS Disable - Low Bat", 8 bytes: uint32 pack sum mV,
+        uint8 capacity %, uint8 module, uint16 status."""
+        if len(x) != 8:
+            return cls.unhandled_entry_format(0x1c, x)
+        pack_sum_volt = convert_mv_to_v(BinaryTools.unpack('uint32', x, 0x00))
+        capacity = BinaryTools.unpack('uint8', x, 0x04)
+        module_number = BinaryTools.unpack('uint8', x, 0x05)
+        status = BinaryTools.unpack('uint16', x, 0x06)
+        return {
+            'event': 'BMS Disable - Low Bat',
+            'structured_data': {
+                'pack_sum_voltage_volts': pack_sum_volt,
+                'capacity_percent': capacity,
+                'module_number': module_number,
+                'status_flags': status,
+                'status_hex': f'0x{status:04x}',
+            },
+            'conditions': 'pack sum: {v:.3f}V, capacity: {c}%, module: {m}, status: 0x{s:04X}'.format(
+                v=pack_sum_volt, c=capacity, m=module_number, s=status)
+        }
+
+    @classmethod
+    def bms_disable_temp(cls, message_type, x):
+        """Types 0x1e / 0x1f: "BMS Disable - High Temp" / "BMS Disable - Low
+        Temp", 4 bytes: int8 pack temp C, uint8 module, uint16 status. The
+        firmware logs -100 C for an invalid thermistor reading; it is kept
+        as-is, not reinterpreted."""
+        if len(x) != 4:
+            return cls.unhandled_entry_format(message_type, x)
+        pack_temp = BinaryTools.unpack('int8', x, 0x00)
+        module_number = BinaryTools.unpack('uint8', x, 0x01)
+        status = BinaryTools.unpack('uint16', x, 0x02)
+        return {
+            'event': 'BMS Disable - High Temp' if message_type == 0x1e else 'BMS Disable - Low Temp',
+            'structured_data': {
+                'pack_temp_celsius': pack_temp,
+                'module_number': module_number,
+                'status_flags': status,
+                'status_hex': f'0x{status:04x}',
+            },
+            'conditions': 'Pack Temp: {t} C, Module: {m}, Status: 0x{s:04X}'.format(
+                t=pack_temp, m=module_number, s=status)
+        }
+
+    @classmethod
+    def batt_temp_status(cls, x):
+        """Type 0x20: battery temperature state, 3 bytes: uint8 state (0
+        "Batt Temp Okay", 1-2 "Batt High Temp Stage N", 3 "Batt Low Temp"),
+        int8 pack temp C, uint8 module. A state byte above 3 has no name in
+        the firmware and falls back to the raw report."""
+        if len(x) != 3:
+            return cls.unhandled_entry_format(0x20, x)
+        state_code = BinaryTools.unpack('uint8', x, 0x00)
+        if state_code > 3:
+            return cls.unhandled_entry_format(0x20, x)
+        pack_temp = BinaryTools.unpack('int8', x, 0x01)
+        module_number = BinaryTools.unpack('uint8', x, 0x02)
+        if state_code == 0:
+            event, state = 'Batt Temp Okay', 'okay'
+        elif state_code == 3:
+            event, state = 'Batt Low Temp', 'low'
+        else:
+            event, state = 'Batt High Temp Stage {n}'.format(n=state_code), 'high'
+        structured_data = {'state': state}
+        if state == 'high':
+            structured_data['stage'] = state_code
+        structured_data['pack_temp_celsius'] = pack_temp
+        structured_data['module_number'] = module_number
+        return {
+            'event': event,
+            'structured_data': structured_data,
+            'conditions': 'Pack Temp: {t} C, Module: {m}'.format(t=pack_temp, m=module_number)
+        }
+
+    @classmethod
+    def high_motor_controller_temp(cls, x):
+        """Type 0x26: "High Mot/Ctrl", 6 bytes: uint16 motor temp C, uint16
+        controller temp C. The firmware renderer never reads bytes 4-5, so
+        they are not identified and stay in raw_hex with the rest of the
+        payload."""
+        if len(x) != 6:
+            return cls.unhandled_entry_format(0x26, x)
+        motor_temp = BinaryTools.unpack('uint16', x, 0x00)
+        controller_temp = BinaryTools.unpack('uint16', x, 0x02)
+        return {
+            'event': 'High Mot/Ctrl',
+            'structured_data': {
+                'motor_temp_celsius': motor_temp,
+                'controller_temp_celsius': controller_temp,
+                'raw_hex': bytes(x).hex(),
+            },
+            'conditions': 'Mot: {m}C, Ctrl: {c}C'.format(m=motor_temp, c=controller_temp)
+        }
+
+    @classmethod
+    def exceeded_max_charge_amps(cls, x):
+        """Type 0x35: "Exceeded Max Charge Amps", two forms, both handled by
+        the firmware renderer's own length branch:
+        - 5 bytes: uint8 module, int8 amps exceeded, uint8 seconds exceeded,
+          int16 amps at log
+        - 6 bytes: uint8 module, int16 amps exceeded, uint8 seconds
+          exceeded, int16 amps at log
+        Charging current is negative in this log's sign convention."""
+        if len(x) == 5:
+            exceeded = BinaryTools.unpack('int8', x, 0x01)
+            seconds = BinaryTools.unpack('uint8', x, 0x02)
+            at_log = BinaryTools.unpack('int16', x, 0x03)
+        elif len(x) == 6:
+            exceeded = BinaryTools.unpack('int16', x, 0x01)
+            seconds = BinaryTools.unpack('uint8', x, 0x03)
+            at_log = BinaryTools.unpack('int16', x, 0x04)
+        else:
+            return cls.unhandled_entry_format(0x35, x)
+        module_number = BinaryTools.unpack('uint8', x, 0x00)
+        return {
+            'event': 'Exceeded Max Charge Amps',
+            'structured_data': {
+                'module_number': module_number,
+                'exceeded_current_amps': exceeded,
+                'exceeded_seconds': seconds,
+                'current_at_log_amps': at_log,
+            },
+            'conditions': 'modnum: {m}, amps_exceeded: {e}, sec_exceeded: {s}, amps_at_log: {a}'.format(
+                m=module_number, e=exceeded, s=seconds, a=at_log)
         }
 
     @classmethod
@@ -2419,11 +2587,11 @@ class Gen2:
             0x15: "BMS Contactor State",
             0x16: "BMS Discharge Cutback",
             0x18: "BMS Contactor Drive",
-            0x1c: "MBB Unknown Type 28",
-            0x1e: "MBB Unknown Type 30",
-            0x1f: "MBB Unknown Type 31",
-            0x20: "MBB Unknown Type 32",
-            0x26: "MBB Unknown Type 38",
+            0x1c: "BMS Disable - Low Bat",
+            0x1e: "BMS Disable - High Temp",
+            0x1f: "BMS Disable - Low Temp",
+            0x20: "Batt Temp",
+            0x26: "High Mot/Ctrl",
             0x28: "Battery CAN Link Up",
             0x29: "Battery CAN Link Down",
             0x2a: "Sevcon CAN Link Up",
@@ -2436,7 +2604,7 @@ class Gen2:
             0x32: "Firmware Build Info",
             0x33: "Battery Module Status",
             0x34: "Power State",
-            0x35: "MBB Unknown Type 53",
+            0x35: "Exceeded Max Charge Amps",
             0x36: "Sevcon Power State",
             0x37: "MBB BT RX Buffer Overflow",
             0x38: "Bluetooth State",
@@ -2444,7 +2612,7 @@ class Gen2:
             0x3a: "Low Chassis Isolation",
             0x3b: "Precharge Decay Too Steep",
             0x3c: "Disarmed Status",
-            0x3d: "Battery Module Contactor Closed",
+            0x3d: "Sevcon Failed To Fully Precharge",
             0x3e: "Cell Voltages",
             0x51: "Vehicle State Telemetry",  # Type 81 (0x51)
             0x52: "Unknown Type 82",          # Type 82 (0x52) - appears in new format
@@ -2523,11 +2691,11 @@ class Gen2:
             0x15: cls.bms_contactor_state,
             0x16: cls.bms_discharge_cut,
             0x18: cls.bms_contactor_drive,
-            0x1c: BinaryTools.mbb_unknown_type_28,
-            # 0x1e: unknown, 4, 6472_MBB_2016-12-12, 0x1e 0x32 0x00 0x06 0x23 ???
-            # 0x1f: unknown, 4, 5078_MBB_2017-01-20, 0x1f 0x00 0x00 0x08 0x43 ???
-            # 0x20: unknown, 3, 6472_MBB_2016-12-12, 0x20 0x02 0x32 0x00 ???
-            0x26: BinaryTools.mbb_unknown_type_38,
+            0x1c: cls.bms_disable_low_bat,
+            0x1e: lambda m: cls.bms_disable_temp(0x1e, m),
+            0x1f: lambda m: cls.bms_disable_temp(0x1f, m),
+            0x20: cls.batt_temp_status,
+            0x26: cls.high_motor_controller_temp,
             0x28: cls.battery_can_link_up,
             0x29: cls.battery_can_link_down,
             0x2a: cls.sevcon_can_link_up,
@@ -2540,7 +2708,7 @@ class Gen2:
             0x32: cls.firmware_build_info,
             0x33: cls.battery_status,
             0x34: cls.power_state,
-            # 0x35: unknown, 5, 6472_MBB_2016-12-12, 0x35 0x00 0x46 0x01 0xcb 0xff ???
+            0x35: cls.exceeded_max_charge_amps,
             0x36: cls.sevcon_power_state,
             0x37: BinaryTools.mbb_bt_rx_buffer_overflow,
             # 0x37: unknown, 0, 3558_MBB_2016-12-25, 0x37  ???
@@ -2549,7 +2717,7 @@ class Gen2:
             0x3a: cls.low_chassis_isolation,
             0x3b: cls.precharge_decay_too_steep,
             0x3c: cls.disarmed_status,
-            0x3d: cls.battery_contactor_closed,
+            0x3d: cls.contactor_closed_or_precharge_failed,
             0x48: cls.charger_info,             # Type 72
             0x4b: lambda m: cls.state_snapshot(0x4b, m),  # Type 75
             0x4c: lambda m: cls.state_snapshot(0x4c, m),  # Type 76
