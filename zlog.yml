@@ -1,0 +1,201 @@
+meta:
+  id: zlog
+  title: A parser for Zero motorcycle MBB and BMS binary log files
+  endian: le
+  #bit-endian: le
+seq:
+  - id: magic
+    contents: [0xB2, 0x75, 0xFB] # FB probable a record type, actually. Seems 0xF$ are
+  - id: file_timestamp
+    type: u4
+  - id: unknown_file_header_section
+    size: 5
+    doc: "last byte is # of entries...but more like min number of entries"
+  - id: file_header_end  
+    contents: [0xF9]
+  - id: log_file_type
+    type: str
+    size: 10  #-MBB is padded with 7 zero's. Is BMS the same? 
+    encoding: ASCII
+  - id: bike_info
+    contents: [0xF2]
+  - id: bike_type
+    size: 93  # (header:117) - (previous:24)
+  #- id: unknown_h2
+  #  size: 6
+  #- id: fw_checksum
+  #  type: strz
+  #  encoding: ASCII
+# end MBB file header
+
+  - id: garbage #```````````Garbage till next 0xb2 entry  
+    terminator: 0xB2
+    consume: false # So next stream can read/start from 0xB2
+    doc: "Holds ring buffer garbage. Used to iterate past untill valid log entry is found"  
+
+  - id: log_entry
+    type: log_entries
+    repeat: until
+    repeat-until: _io.pos == 0x3FFF or _io.eof
+#_io.eof or _io.pos == 0x3FFF
+#_io.pos == 0x3FFF or _io.eof
+  #GEN3::MBB 0x3FFF (16K) 
+  #GEN3::BMS <varies>
+  #GEN2::MBB/BMS 3FFFF (256K) ??
+instances:
+  file_header_size:
+    pos: 0x01
+    type: u1
+    doc: "Looks to always be 0x75 (needs to; for these 'pos' to work)"
+  header_timestamp:
+    pos: 0x03
+    type: u4
+  number_of_entries:
+    pos: 0x0B
+    type: u1
+    doc: "...but more like min number of entries"
+  model:
+    pos: 0x19
+    type: strz
+    encoding: ASCII
+  bike_v_i_n:
+    pos: 0x29
+    type: strz
+    encoding: ASCII
+  board_i_d:
+    pos: 0x65
+    type: u1
+  firmware_rev:
+    pos: 0x67
+    type: u1
+  firmware_build:
+    pos: 0x6B
+    type: strz
+    encoding: ASCII
+
+types:
+# from ttyConsol: Entry / Time of Log / UTC|Code / Event description; and data
+  log_entries:
+    seq:
+    - id: header_begin
+      contents: [0xB2]
+    - id: length
+      type: u1
+    - id: log_type
+      type: u1
+    - id: timestamp
+      type: u4
+    - id: unknown_header_section
+      terminator: 0xF9
+      #size: 4 #--often four but not always(or corrupted entry?)
+#    - id: count
+#     type: u1
+#     doc: 'seems to increment for every 0xB2 record'
+#    - id: header_end
+#      contents: [0xF9]  # 0xF8=>Serial Log Console
+    - id: data
+      type:
+        switch-on: log_type
+        cases:
+          0x48: charger_info
+          0x49: log_type_49
+          0x51: log_type_51
+          0x52: log_type_52
+          0x53: log_type_53
+          0xFB: log_type_f_b
+          0xfd: debug_message
+          _: log_type_unknown
+
+#  instances:
+#    header:
+#      pos: unknown_header_section.eos
+
+# CHARGERS| EN | DC V   A | AC V   A  HZ |CMD A| Ver |   SN   | ID  | STATUS
+#   3kW ,   0,   0.0,  0.0,  0,   0.0,  0,  0,   201, 0000000, 0x010, 0x0020
+  charger_info:
+    seq:
+      - id: name
+        type: str
+        encoding: ASCII
+        size: 10
+      - id: maybe_bits
+        size: 2
+        doc: "Always? 0x80 0x40"
+      - id: maybe_floats
+        terminator: 60
+        consume: false
+        doc: "size varies"
+      - id: hertz
+        size: 1
+        doc: "Always? 0x3C could be hertz or header end"
+      - id: val
+        size: 1
+    #  - id: en
+    #    size: 1
+    #  - id: d_c_volts
+    #    type: f4
+    #  - id: d_c_amps
+    #    type: f4 
+    #  - id: a_c_volts
+    #    size: 1 
+    #  - id: a_c_amps
+    #    type: f4
+    #  - id: c_m_da
+    #    size: 1
+    #  - id: status
+    #    size: 1
+      - id: i_d
+        size: 1
+      - id: version
+        type: u2
+      - id: serial_number
+        type: u4
+      - id: data
+      #  size: 11
+        eos-error: false
+        terminator: 0xB2
+        consume: false
+  log_type_49:
+    seq:
+      - id: data
+        eos-error: false
+        terminator: 0xB2
+        consume: false
+  log_type_51:
+    seq:    
+      - id: data
+        eos-error: false
+        terminator: 0xB2
+        consume: false
+  log_type_52:
+    seq:    
+      - id: data
+        eos-error: false
+        terminator: 0xB2
+        consume: false
+  log_type_53:
+    seq:  
+      - id: data
+        eos-error: false
+        terminator: 0xB2
+        consume: false
+  log_type_f_b:
+    seq:
+      - id: data
+        eos-error: false
+        terminator: 0xB2
+        consume: false
+  debug_message:
+    seq:
+      - id: debug_message
+        type: str
+        encoding: ASCII
+        eos-error: false
+        terminator: 0xB2
+        consume: false
+  log_type_unknown:
+    seq:
+      - id: data
+        eos-error: false
+        terminator: 0xB2
+        consume: false

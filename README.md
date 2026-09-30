@@ -54,6 +54,8 @@ pip install -e ".[dev]"
 - No external dependencies (uses only Python standard library)
 - Optional: `plotly` and `pandas` for interactive plotting features
 
+## **An attempt to rewrite the parser using [Kaitai Struct](https://kaitai.io/#what-is-it) **
+
 ## Usage
 
 ### Getting Logs
