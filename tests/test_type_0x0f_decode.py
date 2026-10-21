@@ -58,24 +58,24 @@ def test_fields_balance_active():
     d = e['structured_data']
     assert e['event'] == 'BMS Long Term Storage Stats'
     assert d['balance_resistors_active'] == 10
-    assert d['voltage_low_cell_volts'] == 4.110
-    assert d['voltage_high_cell_volts'] == 4.111
-    assert d['voltage_balance_mv'] == 1
-    assert d['bms_temp_celsius'] == 43
+    assert d['voltage_low_cell(V)'] == 4.110
+    assert d['voltage_high_cell(V)'] == 4.111
+    assert d['voltage_balance(mV)'] == 1
+    assert d['bms_temp(°C)'] == 43
     assert d['raw_hex'] == bytes(SAMPLE_BAL_ACTIVE).hex()
 
 
 def test_fields_balance_idle():
     d = Gen2.bms_storage_stats(SAMPLE_BAL_IDLE)['structured_data']
     assert d['balance_resistors_active'] == 0
-    assert d['voltage_balance_mv'] == 2
+    assert d['voltage_balance(mV)'] == 2
 
 
 def test_wide_balance_uses_both_bytes():
     d = Gen2.bms_storage_stats(SAMPLE_WIDE_BALANCE)['structured_data']
-    assert d['voltage_low_cell_volts'] == 1.001
-    assert d['voltage_high_cell_volts'] == 2.677
-    assert d['voltage_balance_mv'] == 2677 - 1001
+    assert d['voltage_low_cell(V)'] == 1.001
+    assert d['voltage_high_cell(V)'] == 2.677
+    assert d['voltage_balance(mV)'] == 2677 - 1001
 
 
 def test_agrees_with_paired_discharge_level():
@@ -84,17 +84,17 @@ def test_agrees_with_paired_discharge_level():
                            (SAMPLE_WIDE_BALANCE, PAIRED_0X3_WIDE_BALANCE)]:
         d = Gen2.bms_storage_stats(sample)['structured_data']
         level = Gen2.bms_discharge_level(paired)['structured_data']
-        assert d['voltage_low_cell_volts'] == level['voltage_low_cell_volts']
-        assert d['voltage_high_cell_volts'] == level['voltage_high_cell_volts']
-        assert d['voltage_balance_mv'] == level['voltage_balance_mv']
-        assert d['bms_temp_celsius'] == level['bms_temp_celsius']
+        assert d['voltage_low_cell(V)'] == level['voltage_low_cell(V)']
+        assert d['voltage_high_cell(V)'] == level['voltage_high_cell(V)']
+        assert d['voltage_balance(mV)'] == level['voltage_balance(mV)']
+        assert d['bms_temp(°C)'] == level['bms_temp(°C)']
 
 
 def test_bytes_0_and_1_not_labelled():
     d = Gen2.bms_storage_stats(SAMPLE_BAL_ACTIVE)['structured_data']
-    assert set(d) == {'balance_resistors_active', 'voltage_low_cell_volts',
-                      'voltage_high_cell_volts', 'voltage_balance_mv',
-                      'bms_temp_celsius', 'raw_hex'}
+    assert set(d) == {'balance_resistors_active', 'voltage_low_cell(V)',
+                      'voltage_high_cell(V)', 'voltage_balance(mV)',
+                      'bms_temp(°C)', 'raw_hex'}
 
 
 def test_wrong_length_falls_back():

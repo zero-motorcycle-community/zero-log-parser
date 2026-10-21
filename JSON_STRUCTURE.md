@@ -116,11 +116,11 @@ The parser supports multiple output formats, each handling structured data diffe
   "conditions": null,
   "is_structured_data": true,
   "structured_data": {
-    "amp_hours": 7,
-    "state_of_charge_percent": 94,
-    "current_amps": 1,
-    "voltage_low_cell_volts": 4.05,
-    "pack_temp_celsius": 21
+    "capacity(Ah)": 7,
+    "state_of_charge(%)": 94,
+    "current(A)": 1,
+    "voltage_low_cell(V)": 4.05,
+    "pack_temp(°C)": 21
   }
 }
 ```
@@ -130,7 +130,7 @@ The parser supports multiple output formats, each handling structured data diffe
 - **Example**:
 ```csv
 entry,timestamp,log_level,message,conditions,uninterpreted
-6,2025-08-03 12:42:34,DATA,Discharge level,"{""amp_hours"":7,""state_of_charge_percent"":94,""current_amps"":1}",
+6,2025-08-03 12:42:34,DATA,Discharge level,"{""capacity(Ah)"":7,""state_of_charge(%)"":94,""current(A)"":1}",
 ```
 
 ### TXT Format
@@ -158,16 +158,16 @@ The parser automatically detects and structures various telemetry data types. Be
 {
   "pack_temp_high_celsius": 21,
   "pack_temp_low_celsius": 20,
-  "state_of_charge_percent": 95,
+  "state_of_charge(%)": 95,
   "pack_voltage_volts": 113.618,
-  "motor_current_amps": -13,
-  "battery_current_amps": 0,
+  "motor_current(A)": -13,
+  "battery_current(A)": 0,
   "modules_status": 10,
   "motor_temp_celsius": 39,
   "controller_temp_celsius": 27,
   "ambient_temp_celsius": 13,
-  "motor_rpm": 700,
-  "odometer_km": 5646
+  "motor_speed(rpm)": 700,
+  "odometer(km)": 5646
 }
 ```
 
@@ -181,16 +181,16 @@ The parser automatically detects and structures various telemetry data types. Be
 {
   "pack_temp_high_celsius": 21,
   "pack_temp_low_celsius": 20,
-  "state_of_charge_percent": 95,
+  "state_of_charge(%)": 95,
   "pack_voltage_volts": 113.907,
-  "motor_current_amps": 0,
-  "battery_current_amps": 1,
+  "motor_current(A)": 0,
+  "battery_current(A)": 1,
   "modules_status": 1,
   "motor_temp_celsius": 23,
   "controller_temp_celsius": 19,
   "ambient_temp_celsius": 17,
-  "motor_rpm": 0,
-  "odometer_km": 5646
+  "motor_speed(rpm)": 0,
+  "odometer(km)": 5646
 }
 ```
 
@@ -205,9 +205,9 @@ The parser automatically detects and structures various telemetry data types. Be
   "pack_temp_high_celsius": 29,
   "pack_temp_low_celsius": 27,
   "ambient_temp_celsius": 30,
-  "state_of_charge_percent": 100,
+  "state_of_charge(%)": 100,
   "pack_voltage_volts": 116.206,
-  "battery_current_amps": -19,
+  "battery_current(A)": -19,
   "modules_status": 1,
   "mbb_charge_enable": "Yes",
   "bms_charge_enable": "No"
@@ -255,8 +255,8 @@ The parser automatically detects and structures various telemetry data types. Be
   "serial_number": "2329104",
   "software_version": 209,
   "voltage_ac": 237,
-  "frequency_hz": 50,
-  "evse_current_amps": 16
+  "frequency(Hz)": 50,
+  "evse_current(A)": 16
 }
 ```
 
@@ -306,14 +306,14 @@ The parser automatically detects and structures various telemetry data types. Be
 
 ```json
 {
-  "amp_hours": 7,
-  "state_of_charge_percent": 94,
-  "current_amps": 1,
-  "voltage_low_cell_volts": 4.05,
+  "capacity(Ah)": 7,
+  "state_of_charge(%)": 94,
+  "current(A)": 1,
+  "voltage_low_cell(V)": 4.05,
   "voltage_unloaded_cell_volts": 4.05,
   "voltage_high_cell_volts": 4.05,
   "voltage_balance_mv": 4,
-  "pack_temp_celsius": 21,
+  "pack_temp(°C)": 21,
   "bms_temp_celsius": 27,
   "pack_voltage_volts": 113.4,
   "pack_voltage_mv": 113400,
@@ -344,8 +344,8 @@ The parser automatically detects and structures various telemetry data types. Be
   "voltage_max": 4057,
   "voltage_min_1": 4049,
   "voltage_min_2": 4050,
-  "current_ma": 1090,
-  "current_amps": 1.09
+  "current(mA)": 1090,
+  "current(A)": 1.09
 }
 ```
 
@@ -432,7 +432,7 @@ The parser automatically detects and structures various telemetry data types. Be
 ```json
 {
   "mode": 2,
-  "current_ma": 1272,
+  "current(mA)": 1272,
   "current_a": 1.272,
   "voltage_rate_mv_per_min": 0,
   "voltage_rate_mv_per_min_alt": 1,
@@ -451,7 +451,7 @@ The parser automatically detects and structures various telemetry data types. Be
 
 ```json
 {
-  "discharge_current_ma": 908,
+  "discharge_current(mA)": 908,
   "discharge_current_a": 0.908
 }
 ```
@@ -470,14 +470,14 @@ The parser automatically detects and structures various telemetry data types. Be
 | `*_ma` | Current in milliamperes | `1090` |
 | `*_rpm` | Rotations per minute | `700` |
 | `*_km` | Distance in kilometers | `5646` |
-| `*_hz` | Frequency in hertz | `50` |
+| `*(Hz)` | Frequency in hertz | `50` |
 | `*_ms` | Time in milliseconds | `600014` |
 | `*_seconds` | Time in seconds | `600.014` |
 
 ### Specific Field Meanings
 
 #### Battery Fields
-- `state_of_charge_percent`: Battery charge level (0-100%)
+- `state_of_charge(%)`: Battery charge level (0-100%)
 - `pack_voltage_volts`: Total battery pack voltage
 - `battery_current_amps`: Current flow to/from battery (negative = charging)
 - `amp_hours`: Cumulative amp-hours consumed
@@ -485,7 +485,7 @@ The parser automatically detects and structures various telemetry data types. Be
 
 #### Motor Fields
 - `motor_current_amps`: Motor current draw (negative = regeneration)
-- `motor_rpm`: Motor rotational speed
+- `motor_speed(rpm)`: Motor rotational speed
 - `motor_temp_celsius`: Motor temperature
 
 #### Temperature Fields
@@ -518,9 +518,9 @@ for entry in log_data['entries']:
     if entry.get('event') == 'Riding' and entry.get('is_structured_data'):
         riding_data.append({
             'timestamp': entry['timestamp'],
-            'soc_percent': entry['structured_data']['state_of_charge_percent'],
-            'motor_rpm': entry['structured_data']['motor_rpm'],
-            'motor_temp': entry['structured_data']['motor_temp_celsius']
+            'soc(%)': entry['structured_data']['state_of_charge(%)'],
+            'motor_speed(rpm)': entry['structured_data']['motor_speed(rpm)'],
+            'motor_temp': entry['structured_data']['motor_temp(°C)']
         })
 
 print(f"Found {len(riding_data)} riding data points")
@@ -537,7 +537,7 @@ discharge_events = [
 
 # Extract SOC progression
 soc_history = [
-    (entry['timestamp'], entry['structured_data']['state_of_charge_percent'])
+    (entry['timestamp'], entry['structured_data']['state_of_charge(%)'])
     for entry in discharge_events
 ]
 ```

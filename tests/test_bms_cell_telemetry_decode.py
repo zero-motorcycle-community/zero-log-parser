@@ -80,19 +80,19 @@ def test_each_tier_decodes_the_core_fields():
         out = Gen2.bms_cell_telemetry(message_type, _payload(message_type))
         assert out['event'] == 'BMS Cell Telemetry'
         sd = out['structured_data']
-        assert sd['voltage_low_cell_volts'] == 3.700
-        assert sd['voltage_unloaded_cell_volts'] == 3.750
-        assert sd['voltage_high_cell_volts'] == 3.720
-        assert sd['state_of_charge_percent'] == 85
-        assert sd['battery_current_amps'] == -1.500
-        assert sd['pack_voltage_volts'] == 103.800
+        assert sd['voltage_low_cell(V)'] == 3.700
+        assert sd['voltage_unloaded_cell(V)'] == 3.750
+        assert sd['voltage_high_cell(V)'] == 3.720
+        assert sd['state_of_charge(%)'] == 85
+        assert sd['battery_current(A)'] == -1.500
+        assert sd['pack_voltage(V)'] == 103.800
 
 
 def test_negative_current_means_charging_by_sign():
     out = Gen2.bms_cell_telemetry(0x4b, _payload(0x4b, current_ma=-2500))
-    assert out['structured_data']['battery_current_amps'] == -2.500
+    assert out['structured_data']['battery_current(A)'] == -2.500
     out = Gen2.bms_cell_telemetry(0x4b, _payload(0x4b, current_ma=1800))
-    assert out['structured_data']['battery_current_amps'] == 1.800
+    assert out['structured_data']['battery_current(A)'] == 1.800
 
 
 def test_current_is_a_32bit_field_not_16bit():
@@ -102,11 +102,11 @@ def test_current_is_a_32bit_field_not_16bit():
     # reads a 4-byte int32, not a 2-byte int16.
     out = Gen2.bms_cell_telemetry(0x4b, SAMPLE_4B_WIDE_CURRENT)
     sd = out['structured_data']
-    assert sd['battery_current_amps'] == 92.652
-    assert sd['voltage_low_cell_volts'] == 3.425
-    assert sd['voltage_high_cell_volts'] == 3.467
-    assert sd['state_of_charge_percent'] == 79
-    assert sd['pack_voltage_volts'] == 96.468
+    assert sd['battery_current(A)'] == 92.652
+    assert sd['voltage_low_cell(V)'] == 3.425
+    assert sd['voltage_high_cell(V)'] == 3.467
+    assert sd['state_of_charge(%)'] == 79
+    assert sd['pack_voltage(V)'] == 96.468
 
 
 def test_no_field_is_named_temperature():
@@ -179,4 +179,4 @@ def test_parse_entry_dispatches_all_three_types_end_to_end():
         assert length == len(raw)
         assert entry['event'] == 'BMS Cell Telemetry'
         assert entry['message_type'] == '0x%X' % message_type
-        assert entry['structured_data']['state_of_charge_percent'] == 85
+        assert entry['structured_data']['state_of_charge(%)'] == 85

@@ -1,7 +1,7 @@
 """
 Tests for entry type 0x51 ("Vehicle State Telemetry") in
 Gen2.vehicle_state_telemetry(), after the field fix in
-analysis/vst_field_fix.md: odometer_meters/odometer_km/soc_raw/soc_percent/
+analysis/vst_field_fix.md: odometer(m)/odometer(km)/soc_raw/soc_percent/
 ambient_temperature_* removed (never confirmed anywhere in this payload -
 bytes 0-3 are the entry's own sub-second timestamp fraction, bytes 4-5 the
 shared sequence/marker prefix, bytes 8-11 either always zero or an
@@ -56,14 +56,14 @@ def test_decodes_state_prefix_and_temperatures():
     assert sd['subsecond_us'] == 987000
     assert sd['sequence'] == 0x22
     assert sd['marker'] == 0xfc
-    assert (sd['temperature_1_celsius'], sd['temperature_2_celsius'],
-            sd['temperature_3_celsius'], sd['temperature_4_celsius']) == (30, 25, 18, 17)
+    assert (sd['temperature_1(°C)'], sd['temperature_2(°C)'],
+            sd['temperature_3(°C)'], sd['temperature_4(°C)']) == (30, 25, 18, 17)
 
 
 def test_odometer_and_soc_fields_are_gone():
     sd = Gen2.vehicle_state_telemetry(_payload())['structured_data']
-    for key in ('odometer_meters', 'odometer_km', 'soc_raw', 'soc_percent',
-                'ambient_temperature_raw', 'ambient_temperature_celsius'):
+    for key in ('odometer(m)', 'odometer(km)', 'soc_raw', 'soc(%)',
+                'ambient_temperature_raw', 'ambient_temperature(°C)'):
         assert key not in sd, key
 
 
@@ -83,8 +83,8 @@ def test_temperatures_read_from_the_stride_four_offsets_not_48_51():
     payload[56] = 33
     payload[60] = 22
     sd = Gen2.vehicle_state_telemetry(payload)['structured_data']
-    assert (sd['temperature_1_celsius'], sd['temperature_2_celsius'],
-            sd['temperature_3_celsius'], sd['temperature_4_celsius']) == (55, 44, 33, 22)
+    assert (sd['temperature_1(°C)'], sd['temperature_2(°C)'],
+            sd['temperature_3(°C)'], sd['temperature_4(°C)']) == (55, 44, 33, 22)
 
 
 def test_all_eleven_known_states_decode_including_rev_and_park():

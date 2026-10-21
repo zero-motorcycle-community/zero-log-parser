@@ -175,7 +175,7 @@ Offset     | Length     | Contents
 0x0000000c | 4          | Log entries count
 0x00000010 | *variable* | Log data begins
 
-The event log file appears to be a direct memory dump from a ring buffer. All logs export as 0x3ffff bytes in length. Bikes logs which exceed this offset begin overwriting themself from the top of the log data section.
+The event log file appears to be a direct memory dump from a ring buffer. All logs export as 0x3ffff bytes in length. Bikes logs which exceed this offset begin overwriting themselves from the top of the log data section.
 
 # BMS log file layout
 
@@ -204,7 +204,7 @@ Offset | Length    | Contents
 
 Note that the entry appears to be encoded in some format starting from the entry type onwards (ie Entry type, timestamp, Entry data). Any bytes of 0xFE are xor'ed with the next byte -1.
 
-For example, the byte sequenze 0xFE, 0x01 becomes 0xFE. The byte sequence OxFE, 0x4d becomes 0xb2. The length of the message is reduced accordingly.
+For example, the byte sequence 0xFE, 0x01 becomes 0xFE. The byte sequence OxFE, 0x4d becomes 0xb2. The length of the message is reduced accordingly.
 
 ## Log file entry types
 
@@ -423,7 +423,7 @@ Offset | Length | Contents
 0x15   | 2      | ambient temperature
 0x17   | 4      | odometer
 
-*note: all temperatures in degrees celcius*
+*note: all temperatures in degrees Celsius*
 
 ### `0x2d` - Charging status
 Offset | Length | Contents
@@ -436,7 +436,7 @@ Offset | Length | Contents
 0x0c   | 1      | mods (??)
 0x0d   | 2      | ambient temperature
 
-*note: all temperatures in degrees celcius*
+*note: all temperatures in degrees Celsius*
 
 ### `0x2f` - sevcon status
 Offset | Length | Contents
@@ -505,7 +505,7 @@ Offset | Length | Contents
 ------ | :----: | --------
 0x00   | 3      | Buffer overflow data (displayed as hex in parser)
 
-### `0x38` - bluetooth state
+### `0x38` - Bluetooth state
 *(no additional data)*
 
 ### `0x39` - battery discharge current limited

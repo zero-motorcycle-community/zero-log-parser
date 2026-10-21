@@ -508,8 +508,8 @@ class ZeroLogPlotter:
         # Combine all data with SOC
         soc_data = []
         for name, df in self.data.items():
-            if not df.empty and 'state_of_charge_percent' in df.columns:
-                temp_df = df[['timestamp', 'state_of_charge_percent']].copy()
+            if not df.empty and 'state_of_charge(%)' in df.columns:
+                temp_df = df[['timestamp', 'state_of_charge(%)']].copy()
                 temp_df['mode'] = name.replace('_', ' ').title()
                 soc_data.append(temp_df)
         
@@ -531,7 +531,7 @@ class ZeroLogPlotter:
                 
                 fig.add_trace(go.Scatter(
                     x=mode_data_with_gaps['timestamp'],
-                    y=mode_data_with_gaps['state_of_charge_percent'],
+                    y=mode_data_with_gaps['state_of_charge(%)'],
                     mode='lines+markers',
                     name=mode,
                     line=dict(color=colors.get(mode, '#8c564b')),
@@ -562,15 +562,15 @@ class ZeroLogPlotter:
         
         # Battery current (primary y-axis)
         fig.add_trace(
-            go.Scatter(x=riding_data['timestamp'], y=riding_data['battery_current_amps'],
+            go.Scatter(x=riding_data['timestamp'], y=riding_data['battery_current(A)'],
                       name='Battery Current', line=dict(color='blue'), connectgaps=False),
             secondary_y=False,
         )
         
         # Motor current (secondary y-axis)
-        if 'motor_current_amps' in riding_data.columns:
+        if 'motor_current(A)' in riding_data.columns:
             fig.add_trace(
-                go.Scatter(x=riding_data['timestamp'], y=riding_data['motor_current_amps'],
+                go.Scatter(x=riding_data['timestamp'], y=riding_data['motor_current(A)'],
                           name='Motor Current', line=dict(color='red'), connectgaps=False),
                 secondary_y=True,
             )
@@ -594,7 +594,7 @@ class ZeroLogPlotter:
                                             xref="paper", yref="paper", x=0.5, y=0.5)
         
         # Check if ambient temperature is available
-        if 'ambient_temp_celsius' not in temp_data.columns:
+        if 'ambient_temp(°C)' not in temp_data.columns:
             return go.Figure().add_annotation(text="No ambient temperature data available for delta calculation",
                                             xref="paper", yref="paper", x=0.5, y=0.5)
         
@@ -606,15 +606,15 @@ class ZeroLogPlotter:
         
         # Calculate temperature deltas relative to ambient
         temp_columns = [
-            ('motor_temp_celsius', 'Motor Δ Temperature', '#ff7f0e'),
-            ('controller_temp_celsius', 'Controller Δ Temperature', '#2ca02c'),
-            ('pack_temp_high_celsius', 'Pack High Δ Temperature', '#d62728')
+            ('motor_temp(°C)', 'Motor Δ Temperature', '#ff7f0e'),
+            ('controller_temp(°C)', 'Controller Δ Temperature', '#2ca02c'),
+            ('pack_temp_high(°C)', 'Pack High Δ Temperature', '#d62728')
         ]
         
         for col, name, color in temp_columns:
             if col in temp_data.columns:
                 # Calculate delta from ambient temperature
-                delta_temp = temp_data[col] - temp_data['ambient_temp_celsius']
+                delta_temp = temp_data[col] - temp_data['ambient_temp(°C)']
                 
                 fig.add_trace(go.Scatter(
                     x=temp_data['timestamp'],
@@ -623,7 +623,7 @@ class ZeroLogPlotter:
                     name=name,
                     line=dict(color=color),
                     connectgaps=False,  # Show gaps when motorcycle is off
-                    customdata=list(zip(temp_data[col], temp_data['ambient_temp_celsius'])),
+                    customdata=list(zip(temp_data[col], temp_data['ambient_temp(°C)'])),
                     hovertemplate='<b>%{fullData.name}</b><br>' +
                                 'Time: %{x}<br>' +
                                 'Δ Temperature: %{y:.1f}°C<br>' +
@@ -668,18 +668,18 @@ class ZeroLogPlotter:
         if not bms_data.empty:
             pack_voltage_data.append(bms_data)
             # Only add BMS data to cell voltage if it actually has cell voltage values
-            if 'voltage_max_volts' in bms_data.columns and bms_data['voltage_max_volts'].notna().any():
+            if 'voltage_max(V)' in bms_data.columns and bms_data['voltage_max(V)'].notna().any():
                 cell_voltage_data.append(bms_data)
         if not bms_discharge_data.empty:
             pack_voltage_data.append(bms_discharge_data)
             # Only add BMS discharge data to cell voltage if it actually has cell voltage values
-            if 'voltage_max_volts' in bms_discharge_data.columns and bms_discharge_data['voltage_max_volts'].notna().any():
+            if 'voltage_max(V)' in bms_discharge_data.columns and bms_discharge_data['voltage_max(V)'].notna().any():
                 cell_voltage_data.append(bms_discharge_data)
             
         # Add MBB data (has pack_voltage_volts but not meaningful cell voltages)
-        if not riding_data.empty and 'pack_voltage_volts' in riding_data.columns:
+        if not riding_data.empty and 'pack_voltage(V)' in riding_data.columns:
             pack_voltage_data.append(riding_data)
-        if not disarmed_data.empty and 'pack_voltage_volts' in disarmed_data.columns:
+        if not disarmed_data.empty and 'pack_voltage(V)' in disarmed_data.columns:
             pack_voltage_data.append(disarmed_data)
         
         if not pack_voltage_data:
@@ -706,10 +706,10 @@ class ZeroLogPlotter:
         )
         
         # Pack voltage subplot (row 1)
-        if 'pack_voltage_volts' in combined_data.columns:
+        if 'pack_voltage(V)' in combined_data.columns:
             fig.add_trace(go.Scatter(
                 x=combined_data['timestamp'],
-                y=combined_data['pack_voltage_volts'],
+                y=combined_data['pack_voltage(V)'],
                 mode='lines',
                 name='Pack Voltage',
                 line=dict(color='blue'),
@@ -720,11 +720,11 @@ class ZeroLogPlotter:
         cell_data_to_plot = cell_voltage_combined if cell_voltage_combined is not None else combined_data
         
         # Use standardized volt fields if available
-        if 'voltage_max_volts' in cell_data_to_plot.columns and 'voltage_min_1_volts' in cell_data_to_plot.columns:
+        if 'voltage_max(V)' in cell_data_to_plot.columns and 'voltage_min_1(V)' in cell_data_to_plot.columns:
             # Use pre-converted volt values
             fig.add_trace(go.Scatter(
                 x=cell_data_to_plot['timestamp'],
-                y=cell_data_to_plot['voltage_max_volts'],
+                y=cell_data_to_plot['voltage_max(V)'],
                 mode='lines',
                 name='Max Cell Voltage',
                 line=dict(color='red', dash='dash'),
@@ -733,7 +733,7 @@ class ZeroLogPlotter:
             
             fig.add_trace(go.Scatter(
                 x=cell_data_to_plot['timestamp'], 
-                y=cell_data_to_plot['voltage_min_1_volts'],
+                y=cell_data_to_plot['voltage_min_1(V)'],
                 mode='lines',
                 name='Min Cell Voltage',
                 line=dict(color='orange', dash='dash'),
@@ -786,26 +786,26 @@ class ZeroLogPlotter:
         """Plot performance vs efficiency scatter."""
         riding_data = self.data['mbb_riding']
         
-        if riding_data.empty or 'motor_rpm' not in riding_data.columns:
+        if riding_data.empty or 'motor_speed(rpm)' not in riding_data.columns:
             return go.Figure().add_annotation(text="No performance data available",
                                             xref="paper", yref="paper", x=0.5, y=0.5)
         
         # Filter out zero RPM for meaningful analysis
-        perf_data = riding_data[riding_data['motor_rpm'] > 0]
+        perf_data = riding_data[riding_data['motor_speed(rpm)'] > 0]
         
         fig = go.Figure()
         
         fig.add_trace(go.Scatter(
-            x=perf_data['motor_rpm'],
-            y=perf_data['battery_current_amps'],
+            x=perf_data['motor_speed(rpm)'],
+            y=perf_data['battery_current(A)'],
             mode='markers',
             marker=dict(
-                color=perf_data['state_of_charge_percent'],
+                color=perf_data['state_of_charge(%)'],
                 colorscale='Viridis',
                 colorbar=dict(title='SOC (%)'),
                 size=6
             ),
-            text=perf_data['state_of_charge_percent'],
+            text=perf_data['state_of_charge(%)'],
             hovertemplate='RPM: %{x}<br>Current: %{y}A<br>SOC: %{text}%<extra></extra>'
         ))
         
@@ -825,7 +825,7 @@ class ZeroLogPlotter:
         
         # Check if we have any relevant data
         has_charging_data = not (charging_data.empty and stopped_data.empty)
-        has_recuperation_data = not riding_data.empty and 'battery_current_amps' in riding_data.columns
+        has_recuperation_data = not riding_data.empty and 'battery_current(A)' in riding_data.columns
         
         if not has_charging_data and not has_recuperation_data:
             return go.Figure().add_annotation(text="No charging or recuperation data available",
@@ -851,10 +851,10 @@ class ZeroLogPlotter:
                     connectgaps=False
                 ), row=1, col=1)
             
-            if 'evse_current_amps' in all_charging.columns:
+            if 'evse_current(A)' in all_charging.columns:
                 fig.add_trace(go.Scatter(
                     x=all_charging['timestamp'],
-                    y=all_charging['evse_current_amps'],
+                    y=all_charging['evse_current(A)'],
                     mode='lines+markers',
                     name='EVSE Current',
                     line=dict(color='red'),
@@ -863,13 +863,13 @@ class ZeroLogPlotter:
         
         # Add SOC data if available
         soc_charging = self.data['mbb_charging']
-        if not soc_charging.empty and 'state_of_charge_percent' in soc_charging.columns:
+        if not soc_charging.empty and 'state_of_charge(%)' in soc_charging.columns:
             # Apply gap insertion to SOC data
             soc_with_gaps = self._insert_gaps_for_temporal_breaks(soc_charging)
             
             fig.add_trace(go.Scatter(
                 x=soc_with_gaps['timestamp'],
-                y=soc_with_gaps['state_of_charge_percent'],
+                y=soc_with_gaps['state_of_charge(%)'],
                 mode='lines+markers',
                 name='SOC',
                 line=dict(color='green'),
@@ -884,17 +884,17 @@ class ZeroLogPlotter:
             recuperation_data = riding_with_gaps.copy()
             
             # Convert negative current to positive, set positive current to NaN
-            recuperation_data['recuperation_amps'] = riding_with_gaps['battery_current_amps'].apply(
+            recuperation_data['recuperation(A)'] = riding_with_gaps['battery_current(A)'].apply(
                 lambda x: -x if pd.notna(x) and x < 0 else (pd.NA if pd.notna(x) else x)
             )
             
             # Only add trace if we have actual recuperation events
-            has_recuperation_events = recuperation_data['recuperation_amps'].notna().any()
+            has_recuperation_events = recuperation_data['recuperation(A)'].notna().any()
             
             if has_recuperation_events:
                 fig.add_trace(go.Scatter(
                     x=recuperation_data['timestamp'],
-                    y=recuperation_data['recuperation_amps'],
+                    y=recuperation_data['recuperation(A)'],
                     mode='lines+markers',
                     name='Recuperation Current',
                     line=dict(color='orange'),
@@ -906,7 +906,7 @@ class ZeroLogPlotter:
                 ), row=4, col=1)
                 
                 # Add zero line for reference
-                valid_recuperation_data = recuperation_data.dropna(subset=['recuperation_amps'])
+                valid_recuperation_data = recuperation_data.dropna(subset=['recuperation(A)'])
                 if len(valid_recuperation_data) > 0:
                     time_range = [valid_recuperation_data['timestamp'].min(), valid_recuperation_data['timestamp'].max()]
                     fig.add_trace(go.Scatter(
@@ -960,23 +960,23 @@ class ZeroLogPlotter:
         """Plot odometer vs SOC for range analysis."""
         riding_data = self.data['mbb_riding']
         
-        if riding_data.empty or 'odometer_km' not in riding_data.columns:
+        if riding_data.empty or 'odometer(km)' not in riding_data.columns:
             return go.Figure().add_annotation(text="No odometer data available",
                                             xref="paper", yref="paper", x=0.5, y=0.5)
         
         fig = go.Figure()
         
         fig.add_trace(go.Scatter(
-            x=riding_data['odometer_km'],
-            y=riding_data['state_of_charge_percent'],
+            x=riding_data['odometer(km)'],
+            y=riding_data['state_of_charge(%)'],
             mode='markers',
             marker=dict(
-                color=riding_data['battery_current_amps'],
+                color=riding_data['battery_current(A)'],
                 colorscale='RdYlBu_r',
                 colorbar=dict(title='Battery Current (A)'),
                 size=6
             ),
-            text=riding_data['battery_current_amps'],
+            text=riding_data['battery_current(A)'],
             hovertemplate='Odometer: %{x} km<br>SOC: %{y}%<br>Current: %{text}A<extra></extra>'
         ))
         

@@ -88,7 +88,7 @@ def test_dispatched_and_described():
 def test_0x3d_is_capacitor_voltage_not_module_number():
     e = _decode(0x3d, SAMPLE_3D)
     assert e['event'] == 'Sevcon Failed To Fully Precharge'
-    assert e['structured_data'] == {'capacitor_voltage_volts': 65.75}
+    assert e['structured_data'] == {'capacitor_voltage(V)': 65.75}
     assert 'module' not in e['event'].lower()
     assert 'contactor' not in e['event'].lower()
 
@@ -117,8 +117,8 @@ def test_0x1c_low_bat():
     e = _decode(0x1c, SAMPLE_1C)
     assert e['event'] == 'BMS Disable - Low Bat'
     d = e['structured_data']
-    assert d['pack_sum_voltage_volts'] == 88.055
-    assert d['capacity_percent'] == 0
+    assert d['pack_sum_voltage(V)'] == 88.055
+    assert d['capacity(%)'] == 0
     assert d['module_number'] == 1
     assert d['status_flags'] == 0x0230
     assert d['status_hex'] == '0x0230'
@@ -128,34 +128,34 @@ def test_0x1e_high_temp_matches_paired_0x20():
     e = _decode(0x1e, SAMPLE_1E)
     assert e['event'] == 'BMS Disable - High Temp'
     d = e['structured_data']
-    assert (d['pack_temp_celsius'], d['module_number'], d['status_hex']) == (50, 0, '0x4306')
+    assert (d['pack_temp(°C)'], d['module_number'], d['status_hex']) == (50, 0, '0x4306')
     p = _decode(0x20, SAMPLE_20_STAGE2_PAIRED)
     assert p['event'] == 'Batt High Temp Stage 2'
-    assert (p['structured_data']['pack_temp_celsius'], p['structured_data']['module_number']) == (50, 0)
+    assert (p['structured_data']['pack_temp(°C)'], p['structured_data']['module_number']) == (50, 0)
 
 
 def test_0x1e_invalid_thermistor_kept_as_is():
     d = _decode(0x1e, SAMPLE_1E_INVALID_THERMISTOR)['structured_data']
-    assert d['pack_temp_celsius'] == -100
+    assert d['pack_temp(°C)'] == -100
 
 
 def test_0x1f_low_temp_signed_and_matches_paired_0x20():
     e = _decode(0x1f, SAMPLE_1F)
     assert e['event'] == 'BMS Disable - Low Temp'
     d = e['structured_data']
-    assert (d['pack_temp_celsius'], d['module_number'], d['status_flags']) == (-2, 0, 0x6308)
+    assert (d['pack_temp(°C)'], d['module_number'], d['status_flags']) == (-2, 0, 0x6308)
     p = _decode(0x20, SAMPLE_20_LOW_PAIRED)
     assert p['event'] == 'Batt Low Temp'
-    assert p['structured_data'] == {'state': 'low', 'pack_temp_celsius': -2, 'module_number': 0}
+    assert p['structured_data'] == {'state': 'low', 'pack_temp(°C)': -2, 'module_number': 0}
 
 
 def test_0x20_okay_and_stage1():
     e = _decode(0x20, SAMPLE_20_OKAY)
     assert e['event'] == 'Batt Temp Okay'
-    assert e['structured_data'] == {'state': 'okay', 'pack_temp_celsius': 49, 'module_number': 0}
+    assert e['structured_data'] == {'state': 'okay', 'pack_temp(°C)': 49, 'module_number': 0}
     e = _decode(0x20, SAMPLE_20_STAGE1)
     assert e['event'] == 'Batt High Temp Stage 1'
-    assert e['structured_data'] == {'state': 'high', 'stage': 1, 'pack_temp_celsius': 61, 'module_number': 0}
+    assert e['structured_data'] == {'state': 'high', 'stage': 1, 'pack_temp(°C)': 61, 'module_number': 0}
 
 
 def test_0x20_unnamed_state_falls_back():
@@ -168,22 +168,22 @@ def test_0x26_motor_controller_temps_and_unread_tail():
     e = _decode(0x26, SAMPLE_26)
     assert e['event'] == 'High Mot/Ctrl'
     d = e['structured_data']
-    assert d['motor_temp_celsius'] == 100
-    assert d['controller_temp_celsius'] == 43
+    assert d['motor_temp(°C)'] == 100
+    assert d['controller_temp(°C)'] == 43
     assert d['raw_hex'] == bytes(SAMPLE_26).hex()
 
 
 def test_0x35_five_byte_form():
     e = _decode(0x35, SAMPLE_35_SHORT)
     assert e['event'] == 'Exceeded Max Charge Amps'
-    assert e['structured_data'] == {'module_number': 0, 'exceeded_current_amps': 25,
-                                    'exceeded_seconds': 2, 'current_at_log_amps': -14}
+    assert e['structured_data'] == {'module_number': 0, 'exceeded_current(A)': 25,
+                                    'exceeded_duration(sec)': 2, 'current_at_log(A)': -14}
 
 
 def test_0x35_six_byte_form():
     e = _decode(0x35, SAMPLE_35_LONG)
-    assert e['structured_data'] == {'module_number': 1, 'exceeded_current_amps': -28,
-                                    'exceeded_seconds': 2, 'current_at_log_amps': -41}
+    assert e['structured_data'] == {'module_number': 1, 'exceeded_current(A)': -28,
+                                    'exceeded_duration(sec)': 2, 'current_at_log(A)': -41}
 
 
 def test_0x35_other_lengths_fall_back():

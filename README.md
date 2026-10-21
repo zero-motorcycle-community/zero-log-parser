@@ -358,7 +358,7 @@ Features:
 Comma-separated values with JSON-encoded structured data:
 ```csv
 entry,timestamp,log_level,message,conditions,uninterpreted
-6,2025-08-03 12:42:34,DATA,Discharge level,"{""amp_hours"":7,""state_of_charge_percent"":94,""current_amps"":1,""voltage_low_cell_volts"":4.05}",
+6,2025-08-03 12:42:34,DATA,Discharge level,"{""capacity(Ah)"":7,""state_of_charge(%)"":94,""current(A)"":1,""voltage_low_cell(V)"":4.05}",
 6499,2025-08-03 12:34:38,INFO,Contactor drive turned on,"Pack V:  113.5V, Switched V:  100.1V, Duty Cycle: 35%",
 ```
 
@@ -366,7 +366,7 @@ entry,timestamp,log_level,message,conditions,uninterpreted
 Tab-separated values with JSON-encoded structured data:
 ```tsv
 entry	timestamp	log_level	message	conditions	uninterpreted
-6	2025-08-03 12:42:34	DATA	Discharge level	{"amp_hours":7,"state_of_charge_percent":94,"current_amps":1}	
+6	2025-08-03 12:42:34	DATA	Discharge level	{"capacity(Ah)":7,"state_of_charge(%)":94,"current(A)":1}	
 6499	2025-08-03 12:34:38	INFO	Contactor drive turned on	Pack V:  113.5V, Switched V:  100.1V, Duty Cycle: 35%	
 ```
 
@@ -377,14 +377,14 @@ For CSV/TSV formats, use `--unnest` to expand structured telemetry data into sep
 **Standard CSV/TSV Output:**
 ```csv
 entry;timestamp;log_level;message;conditions;uninterpreted
-6;2025-08-03 12:42:33;DATA;Discharge level;{"amp_hours":7,"state_of_charge_percent":94};
+6;2025-08-03 12:42:33;DATA;Discharge level;{"capacity(Ah)":7,"state_of_charge(%)":94};
 ```
 
 **With `--unnest` Flag:**
 ```csv
 entry;timestamp;log_level;message;condition_key;condition_value;uninterpreted
 6;2025-08-03 12:42:33;DATA;Discharge level;amp_hours;7;
-6;2025-08-03 12:42:33;DATA;Discharge level;state_of_charge_percent;94;
+6;2025-08-03 12:42:33;DATA;Discharge level;state_of_charge(%);94;
 ```
 
 Usage:
@@ -421,11 +421,11 @@ Structured JSON with metadata and parsed telemetry:
       "uninterpreted": null,
       "is_structured_data": true,
       "structured_data": {
-        "amp_hours": 7,
-        "state_of_charge_percent": 94,
-        "current_amps": 1,
-        "voltage_low_cell_volts": 4.05,
-        "pack_temp_celsius": 21,
+        "capacity(Ah)": 7,
+        "state_of_charge(%)": 94,
+        "current(A)": 1,
+        "voltage_low_cell(V)": 4.05,
+        "pack_temp(°C)": 21,
         "mode": "Bike On"
       }
     },

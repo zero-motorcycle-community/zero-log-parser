@@ -15,7 +15,7 @@ ZERO_TIME_FORMAT = '%Y-%m-%d %H:%M:%S'  # ISO format is more universal
 MBB_TIMESTAMP_GMT_OFFSET = -7 * 60 * 60
 
 
-def get_timezone_offset(tz_code: str | int | None) -> int:
+def get_timezone_offset(tz_code) -> int:
     """Get the timezone offset in seconds from timezone argument"""
     if isinstance(tz_code, int):
         timezone_offset = tz_code * 60 * 60

@@ -820,17 +820,17 @@ class Gen2:
 
         # Extract raw data once from binary
         structured_data = {
-            'amp_hours': trunc(BinaryTools.unpack('uint32', x, 0x06) / 1000000.0),
-            'state_of_charge_percent': BinaryTools.unpack('uint8', x, 0x0a),
-            'current_amps': trunc(BinaryTools.unpack('int32', x, 0x10) / 1000000.0),
-            'voltage_low_cell_volts': BinaryTools.unpack('uint16', x, 0x0) / 1000.0,
-            'voltage_unloaded_cell_volts': BinaryTools.unpack('uint16', x, 0x14) / 1000.0,
-            'voltage_high_cell_volts': BinaryTools.unpack('uint16', x, 0x02) / 1000.0,
-            'voltage_balance_mv': BinaryTools.unpack('uint16', x, 0x02) - BinaryTools.unpack('uint16', x, 0x0),
-            'pack_temp_celsius': BinaryTools.unpack('uint8', x, 0x04),
-            'bms_temp_celsius': BinaryTools.unpack('uint8', x, 0x05),
-            'pack_voltage_volts': BinaryTools.unpack('uint32', x, 0x0b) / 1000.0,
-            'pack_voltage_mv': BinaryTools.unpack('uint32', x, 0x0b),  # For backward compatibility
+            'capacity(Ah)': trunc(BinaryTools.unpack('uint32', x, 0x06) / 1000000.0),
+            'state_of_charge(%)': BinaryTools.unpack('uint8', x, 0x0a),
+            'current(A)': trunc(BinaryTools.unpack('int32', x, 0x10) / 1000000.0),
+            'voltage_low_cell(V)': BinaryTools.unpack('uint16', x, 0x0) / 1000.0,
+            'voltage_unloaded_cell(V)': BinaryTools.unpack('uint16', x, 0x14) / 1000.0,
+            'voltage_high_cell(V)': BinaryTools.unpack('uint16', x, 0x02) / 1000.0,
+            'voltage_balance(mV)': BinaryTools.unpack('uint16', x, 0x02) - BinaryTools.unpack('uint16', x, 0x0),
+            'pack_temp(°C)': BinaryTools.unpack('uint8', x, 0x04),
+            'bms_temp(°C)': BinaryTools.unpack('uint8', x, 0x05),
+            'pack_voltage(V)': BinaryTools.unpack('uint32', x, 0x0b) / 1000.0,
+            'pack_voltage(mV)': BinaryTools.unpack('uint32', x, 0x0b),  # For backward compatibility
             'mode': bike_states.get(BinaryTools.unpack('uint8', x, 0x0f))
         }
 
@@ -838,16 +838,16 @@ class Gen2:
         legacy_conditions = (
             '{AH:03.0f} AH, SOC:{SOC:3d}%, I:{I:3.0f}A, L:{L:4.2f}V, l:{l:4.2f}V, H:{H:4.2f}V, B:{B:03d}mV, '
             'PT:{PT:03d}C, BT:{BT:03d}C, PV:{PV:6.1f}V, M:{M}').format(
-                AH=structured_data['amp_hours'],
-                SOC=structured_data['state_of_charge_percent'],
-                I=structured_data['current_amps'],
-                L=structured_data['voltage_low_cell_volts'],
-                l=structured_data['voltage_unloaded_cell_volts'],
-                H=structured_data['voltage_high_cell_volts'],
-                B=structured_data['voltage_balance_mv'],
-                PT=structured_data['pack_temp_celsius'],
-                BT=structured_data['bms_temp_celsius'],
-                PV=structured_data['pack_voltage_volts'],
+                AH=structured_data['capacity(Ah)'],
+                SOC=structured_data['state_of_charge(%)'],
+                I=structured_data['current(A)'],
+                L=structured_data['voltage_low_cell(V)'],
+                l=structured_data['voltage_unloaded_cell(V)'],
+                H=structured_data['voltage_high_cell(V)'],
+                B=structured_data['voltage_balance(mV)'],
+                PT=structured_data['pack_temp(°C)'],
+                BT=structured_data['bms_temp(°C)'],
+                PV=structured_data['pack_voltage(V)'],
                 M=structured_data['mode']
             )
 
@@ -887,20 +887,20 @@ class Gen2:
         high_mv = BinaryTools.unpack('uint16', x, 0x05)
         structured_data = {
             'balance_resistors_active': BinaryTools.unpack('uint8', x, 0x02),
-            'voltage_low_cell_volts': low_mv / 1000.0,
-            'voltage_high_cell_volts': high_mv / 1000.0,
-            'voltage_balance_mv': BinaryTools.unpack('uint16', x, 0x07),
-            'bms_temp_celsius': BinaryTools.unpack('uint8', x, 0x09),
+            'voltage_low_cell(V)': low_mv / 1000.0,
+            'voltage_high_cell(V)': high_mv / 1000.0,
+            'voltage_balance(mV)': BinaryTools.unpack('uint16', x, 0x07),
+            'bms_temp(°C)': BinaryTools.unpack('uint8', x, 0x09),
             'raw_hex': bytes(x).hex(),
         }
         return {
             'event': 'BMS Long Term Storage Stats',
             'conditions': 'Bal res active: {R}, L:{L:4.3f}V, H:{H:4.3f}V, B:{B:03d}mV, BT:{BT:03d}C'.format(
                 R=structured_data['balance_resistors_active'],
-                L=structured_data['voltage_low_cell_volts'],
-                H=structured_data['voltage_high_cell_volts'],
-                B=structured_data['voltage_balance_mv'],
-                BT=structured_data['bms_temp_celsius']),
+                L=structured_data['voltage_low_cell(V)'],
+                H=structured_data['voltage_high_cell(V)'],
+                B=structured_data['voltage_balance(mV)'],
+                BT=structured_data['bms_temp(°C)']),
             'structured_data': structured_data
         }
 
@@ -924,14 +924,14 @@ class Gen2:
 
         # Build structured data dictionary with descriptive names
         structured_data = {
-            'amp_hours': fields['AH'],
-            'state_of_charge_percent': fields['SOC'],
-            'voltage_low_cell_volts': fields['L'],
-            'voltage_high_cell_volts': fields['H'],
-            'voltage_balance_mv': fields['B'],
-            'pack_temp_celsius': fields['PT'],
-            'bms_temp_celsius': fields['BT'],
-            'pack_voltage_volts': fields['PV'],
+            'capacity(Ah)': fields['AH'],
+            'state_of_charge(%)': fields['SOC'],
+            'voltage_low_cell(V)': fields['L'],
+            'voltage_high_cell(V)': fields['H'],
+            'voltage_balance(mV)': fields['B'],
+            'pack_temp(°C)': fields['PT'],
+            'bms_temp(°C)': fields['BT'],
+            'pack_voltage(V)': fields['PV'],
             'event_type': 'charge_complete'
         }
 
@@ -953,14 +953,14 @@ class Gen2:
 
         # Build structured data dictionary with descriptive names
         structured_data = {
-            'amp_hours': fields['AH'],
-            'state_of_charge_percent': fields['SOC'],
-            'voltage_low_cell_volts': fields['L'],
-            'voltage_high_cell_volts': fields['H'],
-            'voltage_balance_mv': fields['B'],
-            'pack_temp_celsius': fields['PT'],
-            'bms_temp_celsius': fields['BT'],
-            'pack_voltage_volts': fields['PV'],
+            'capacity(Ah)': fields['AH'],
+            'state_of_charge(%)': fields['SOC'],
+            'voltage_low_cell(V)': fields['L'],
+            'voltage_high_cell(V)': fields['H'],
+            'voltage_balance(mV)': fields['B'],
+            'pack_temp(°C)': fields['PT'],
+            'bms_temp(°C)': fields['BT'],
+            'pack_voltage(V)': fields['PV'],
             'event_type': 'discharge_low'
         }
 
@@ -992,18 +992,18 @@ class Gen2:
 
         # Build structured data
         structured_data = {
-            'old_capacity_microamp_hours': old_uah,
-            'old_state_of_charge_percent': old_soc,
-            'new_capacity_microamp_hours': new_uah,
-            'new_state_of_charge_percent': new_soc,
-            'low_cell_voltage_millivolts': low_cell_mv,
-            'capacity_change_microamp_hours': new_uah - old_uah,
-            'soc_change_percent': new_soc - old_soc
+            'old_capacity(µAh)': old_uah,
+            'old_state_of_charge(%)': old_soc,
+            'new_capacity(µAh)': new_uah,
+            'new_state_of_charge(%)': new_soc,
+            'low_cell_voltage(mV)': low_cell_mv,
+            'capacity_change(µAh)': new_uah - old_uah,
+            'soc_change(%)': new_soc - old_soc
         }
 
         # Generate legacy conditions string for backward compatibility
-        legacy_conditions = ('old:   {old}uAH (soc:{old_soc}%), '
-                           'new:   {new}uAH (soc:{new_soc}%), '
+        legacy_conditions = ('old:   {old}µAH (soc:{old_soc}%), '
+                           'new:   {new}µAH (soc:{new_soc}%), '
                            'low cell: {low} mV').format(
                               old=old_uah, old_soc=old_soc,
                               new=new_uah, new_soc=new_soc,
@@ -1024,12 +1024,12 @@ class Gen2:
 
         # Build structured data
         structured_data = {
-            'old_value_millivolts': old_mv,
-            'new_value_millivolts': new_mv,
+            'old_value(mV)': old_mv,
+            'new_value(mV)': new_mv,
             'correction_factor': corrfact,
-            'old_value_volts': old_mv / 1000.0,
-            'new_value_volts': new_mv / 1000.0,
-            'adjustment_millivolts': new_mv - old_mv
+            'old_value(V)': old_mv / 1000.0,
+            'new_value(V)': new_mv / 1000.0,
+            'adjustment(mV)': new_mv - old_mv
         }
 
         # Generate legacy conditions string for backward compatibility
@@ -1058,10 +1058,10 @@ class Gen2:
 
         # Build structured data
         structured_data = {
-            'resistance_ohms': resistance_ohms,
+            'resistance(Ω)': resistance_ohms,
             'cell_number': cell_number,
-            'resistance_kiloohms': resistance_ohms / 1000.0,
-            'resistance_megaohms': resistance_ohms / 1000000.0,
+            'resistance(kΩ)': resistance_ohms / 1000.0,
+            'resistance(MΩ)': resistance_ohms / 1000000.0,
             'is_low_resistance': resistance_ohms < 1000000,  # Less than 1 megaohm is concerning
             'fault_severity': 'critical' if resistance_ohms < 100000 else 'warning' if resistance_ohms < 1000000 else 'info'
         }
@@ -1129,13 +1129,13 @@ class Gen2:
         # Build structured data dictionary
         structured_data = {
             'contactor_state': 'closed' if is_closed else 'opened',
-            'pack_voltage_volts': pack_voltage_v,
-            'switched_voltage_volts': switched_voltage_v,
-            'precharge_percent': precharge_percent,
-            'discharge_current_amps': discharge_current_a,
-            'pack_voltage_mv': pack_voltage,
-            'switched_voltage_mv': switched_voltage,
-            'discharge_current_ma': discharge_current
+            'pack_voltage(V)': pack_voltage_v,
+            'switched_voltage(V)': switched_voltage_v,
+            'precharge(%)': precharge_percent,
+            'discharge_current(A)': discharge_current_a,
+            'pack_voltage(mV)': pack_voltage,
+            'switched_voltage(mV)': switched_voltage,
+            'discharge_current(mA)': discharge_current
         }
 
         # Generate legacy conditions string for backward compatibility
@@ -1163,7 +1163,7 @@ class Gen2:
 
         # Build structured data
         structured_data = {
-            'cutback_percent': cut_pct,
+            'cutback(%)': cut_pct,
             'cutback_raw_value': cut_byte,
             'cutback_ratio': cut_byte / 255.0
         }
@@ -1190,12 +1190,12 @@ class Gen2:
 
         # Build structured data
         structured_data = {
-            'pack_voltage_volts': pack_voltage_v,
-            'switched_voltage_volts': switched_voltage_v,
-            'duty_cycle_percent': duty_cycle,
-            'pack_voltage_millivolts': pack_voltage_raw,
-            'switched_voltage_millivolts': switched_voltage_raw,
-            'voltage_difference_volts': abs(pack_voltage_v - switched_voltage_v)
+            'pack_voltage(V)': pack_voltage_v,
+            'switched_voltage(V)': switched_voltage_v,
+            'duty_cycle(%)': duty_cycle,
+            'pack_voltage(mV)': pack_voltage_raw,
+            'switched_voltage(mV)': switched_voltage_raw,
+            'voltage_difference(V)': abs(pack_voltage_v - switched_voltage_v)
         }
 
         # Generate legacy conditions string for backward compatibility
@@ -1242,20 +1242,20 @@ class Gen2:
                         'soc_raw_1': safe_int(values[0]) if len(values) > 0 else 0,
                         'soc_raw_2': safe_int(values[1]) if len(values) > 1 else 0,
                         'soc_raw_3': safe_int(values[2]) if len(values) > 2 else 0,
-                        'pack_voltage_volts': round(pack_voltage_mv / 1000.0, 3) if isinstance(pack_voltage_mv, int) else pack_voltage_mv,
-                        'pack_voltage_mv': pack_voltage_mv,  # Deprecated, use pack_voltage_volts
+                        'pack_voltage(V)': round(pack_voltage_mv / 1000.0, 3) if isinstance(pack_voltage_mv, int) else pack_voltage_mv,
+                        'pack_voltage(mV)': pack_voltage_mv,  # Deprecated, use pack_voltage_volts
                         'soc_percent_1': safe_int(values[4]) if len(values) > 4 else 0,
                         'soc_percent_2': safe_int(values[5]) if len(values) > 5 else 0,
                         'soc_percent_3': safe_int(values[6]) if len(values) > 6 else 0,
                         'balance_count': safe_int(values[7]) if len(values) > 7 else 0,
-                        'voltage_max_volts': round(voltage_max_mv / 1000.0, 3) if isinstance(voltage_max_mv, int) else voltage_max_mv,
-                        'voltage_min_1_volts': round(voltage_min_1_mv / 1000.0, 3) if isinstance(voltage_min_1_mv, int) else voltage_min_1_mv,
-                        'voltage_min_2_volts': round(voltage_min_2_mv / 1000.0, 3) if isinstance(voltage_min_2_mv, int) else voltage_min_2_mv,
+                        'voltage_max(V)': round(voltage_max_mv / 1000.0, 3) if isinstance(voltage_max_mv, int) else voltage_max_mv,
+                        'voltage_min_1(V)': round(voltage_min_1_mv / 1000.0, 3) if isinstance(voltage_min_1_mv, int) else voltage_min_1_mv,
+                        'voltage_min_2(V)': round(voltage_min_2_mv / 1000.0, 3) if isinstance(voltage_min_2_mv, int) else voltage_min_2_mv,
                         'voltage_max': voltage_max_mv,  # Deprecated, use voltage_max_volts
                         'voltage_min_1': voltage_min_1_mv,  # Deprecated, use voltage_min_1_volts
                         'voltage_min_2': voltage_min_2_mv,  # Deprecated, use voltage_min_2_volts
-                        'current_ma': safe_int(values[11]) if len(values) > 11 else None,
-                        'current_amps': round(safe_int(values[11]) / 1000.0, 3) if len(values) > 11 and isinstance(safe_int(values[11]), int) else None
+                        'current(mA)': safe_int(values[11]) if len(values) > 11 else None,
+                        'current(A)': round(safe_int(values[11]) / 1000.0, 3) if len(values) > 11 and isinstance(safe_int(values[11]), int) else None
                     }
 
                     # Generate legacy conditions string for backward compatibility
@@ -1280,8 +1280,8 @@ class Gen2:
                         'soc_raw_1': safe_int(values[0]),
                         'soc_raw_2': safe_int(values[1]),
                         'soc_raw_3': safe_int(values[2]),
-                        'pack_voltage_mv': pack_voltage_mv,
-                        'pack_voltage_volts': pack_voltage_mv / 1000.0 if isinstance(pack_voltage_mv, int) else pack_voltage_mv,
+                        'pack_voltage(mV)': pack_voltage_mv,
+                        'pack_voltage(V)': pack_voltage_mv / 1000.0 if isinstance(pack_voltage_mv, int) else pack_voltage_mv,
                         'soc_percent_1': safe_int(values[4]),
                         'soc_percent_2': safe_int(values[5]),
                         'soc_percent_3': safe_int(values[6]),
@@ -1329,8 +1329,8 @@ class Gen2:
                     'serial_number': serial_num,
                     'software_version': int(sw_version),
                     'voltage_ac': int(voltage_ac),
-                    'frequency_hz': int(frequency),
-                    'evse_current_amps': int(evse_current)
+                    'frequency(Hz)': int(frequency),
+                    'evse_current(A)': int(evse_current)
                 }
 
                 return {
@@ -1450,17 +1450,17 @@ class Gen2:
 
         # Build structured data dictionary
         structured_data = {
-            'pack_temp_high_celsius': pack_temp_hi,
-            'pack_temp_low_celsius': pack_temp_low,
-            'state_of_charge_percent': soc,
-            'pack_voltage_volts': pack_voltage,
-            'motor_temp_celsius': motor_temp,
-            'controller_temp_celsius': controller_temp,
-            'motor_rpm': rpm,
-            'battery_current_amps': battery_current,
-            'motor_current_amps': motor_current,
-            'ambient_temp_celsius': ambient_temp,
-            'odometer_km': odometer,
+            'pack_temp_high(°C)': pack_temp_hi,
+            'pack_temp_low(°C)': pack_temp_low,
+            'state_of_charge(%)': soc,
+            'pack_voltage(V)': pack_voltage,
+            'motor_temp(°C)': motor_temp,
+            'controller_temp(°C)': controller_temp,
+            'motor_speed(rpm)': rpm,
+            'battery_current(A)': battery_current,
+            'motor_current(A)': motor_current,
+            'ambient_temp(°C)': ambient_temp,
+            'odometer(km)': odometer,
             'mods': mods,
             'mods_raw': mods_raw
         }
@@ -1508,12 +1508,12 @@ class Gen2:
 
         # Build structured data dictionary
         structured_data = {
-            'pack_temp_high_celsius': pack_temp_hi,
-            'pack_temp_low_celsius': pack_temp_low,
-            'ambient_temp_celsius': ambient_temp,
-            'state_of_charge_percent': soc,
-            'pack_voltage_volts': pack_voltage,
-            'battery_current_amps': battery_current,
+            'pack_temp_high(°C)': pack_temp_hi,
+            'pack_temp_low(°C)': pack_temp_low,
+            'ambient_temp(°C)': ambient_temp,
+            'state_of_charge(%)': soc,
+            'pack_voltage(V)': pack_voltage,
+            'battery_current(A)': battery_current,
             'mods': mods,
             'mbb_charge_enabled': True,  # Always true based on message format
             'bms_charge_enabled': False  # Always false based on message format
@@ -2020,20 +2020,20 @@ class Gen2:
 
         structured_data = dict(prefix)
         structured_data.update({
-            'voltage_low_cell_volts': voltage_low / 1000.0,
-            'voltage_unloaded_cell_volts': voltage_unloaded / 1000.0,
-            'voltage_high_cell_volts': voltage_high / 1000.0,
-            'state_of_charge_percent': soc,
-            'battery_current_amps': current_ma / 1000.0,
-            'pack_voltage_volts': pack_voltage_mv / 1000.0,
+            'voltage_low_cell(V)': voltage_low / 1000.0,
+            'voltage_unloaded_cell(V)': voltage_unloaded / 1000.0,
+            'voltage_high_cell(V)': voltage_high / 1000.0,
+            'state_of_charge(%)': soc,
+            'battery_current(A)': current_ma / 1000.0,
+            'pack_voltage(V)': pack_voltage_mv / 1000.0,
         })
 
         structured_data['raw_hex'] = bytes(x).hex()
 
         conditions = (
             f"SOC:{soc}%, Vlow:{voltage_low}mV, Vhigh:{voltage_high}mV, "
-            f"Vpack:{structured_data['pack_voltage_volts']:.3f}V, "
-            f"I:{structured_data['battery_current_amps']:.3f}A"
+            f"Vpack:{structured_data['pack_voltage(V)']:.3f}V, "
+            f"I:{structured_data['battery_current(A)']:.3f}A"
         )
 
         return {
@@ -2146,14 +2146,14 @@ class Gen2:
             'module_number': module_num,
             'event_type': event_name,
             'event_code': event,
-            'module_voltage_volts': mod_volt,
-            'system_max_voltage_volts': sys_max,
-            'system_min_voltage_volts': sys_min,
-            'voltage_difference_volts': sys_max - sys_min,
-            'capacitor_voltage_volts': capacitor_volt,
-            'battery_current_amps': battery_current,
+            'module_voltage(V)': mod_volt,
+            'system_max_voltage(V)': sys_max,
+            'system_min_voltage(V)': sys_min,
+            'voltage_difference(V)': sys_max - sys_min,
+            'capacitor_voltage(V)': capacitor_volt,
+            'battery_current(A)': battery_current,
             'serial_number': printable_serial_no,
-            'precharge_percent': convert_ratio_to_percent(capacitor_volt, mod_volt) if event == 1 else None
+            'precharge(%)': convert_ratio_to_percent(capacitor_volt, mod_volt) if event == 1 else None
         }
 
         # Generate legacy conditions string for backward compatibility
@@ -2263,14 +2263,14 @@ class Gen2:
 
         # Build structured data
         structured_data = {
-            'limit_current_amps': limit,
-            'max_current_amps': max_amp,
+            'limit_current(A)': limit,
+            'max_current(A)': max_amp,
             'limit_percentage': convert_ratio_to_percent(limit, max_amp),
-            'min_cell_voltage_mv': min_cell_mv,
-            'min_cell_voltage_volts': round(min_cell_mv / 1000.0, 3),
-            'max_pack_temp_celsius': temp,
+            'min_cell_voltage(mV)': min_cell_mv,
+            'min_cell_voltage(V)': round(min_cell_mv / 1000.0, 3),
+            'max_pack_temp(°C)': temp,
             'is_current_limited': True,
-            'current_reduction_amps': max_amp - limit
+            'current_reduction(A)': max_amp - limit
         }
 
         # Generate legacy conditions string for backward compatibility
@@ -2296,9 +2296,9 @@ class Gen2:
 
         # Build structured data
         structured_data = {
-            'resistance_kohms': resistance_kohms,
-            'resistance_ohms': resistance_kohms * 1000,
-            'resistance_mohms': resistance_kohms * 1000000,
+            'resistance(kΩ)': resistance_kohms,
+            'resistance(Ω)': resistance_kohms * 1000,
+            'resistance(mΩ)': resistance_kohms * 1000000,
             'affected_cell_number': cell_number,
             'isolation_fault': True,
             'is_critical': resistance_kohms < 500  # Typical critical threshold
@@ -2331,7 +2331,7 @@ class Gen2:
         pack_voltage = convert_mv_to_v(BinaryTools.unpack('uint32', x, 0x4))
         motor_temp = BinaryTools.unpack('int16', x, 0x8)
         controller_temp = BinaryTools.unpack('int16', x, 0xa)
-        rpm = BinaryTools.unpack('uint16', x, 0xc)
+        motor_speed_rpm = BinaryTools.unpack('uint16', x, 0xc)
         battery_current = BinaryTools.unpack('uint8', x, 0x10)
         mods = BinaryTools.unpack('uint8', x, 0x12)
         motor_current = BinaryTools.unpack('int8', x, 0x13)
@@ -2340,17 +2340,17 @@ class Gen2:
 
         # Build structured data dictionary
         structured_data = {
-            'pack_temp_high_celsius': pack_temp_hi,
-            'pack_temp_low_celsius': pack_temp_low,
-            'state_of_charge_percent': soc,
-            'pack_voltage_volts': pack_voltage,
-            'motor_temp_celsius': motor_temp,
-            'controller_temp_celsius': controller_temp,
-            'motor_rpm': rpm,
-            'battery_current_amps': battery_current,
-            'motor_current_amps': motor_current,
-            'ambient_temp_celsius': ambient_temp,
-            'odometer_km': odometer,
+            'pack_temp_high(°C)': pack_temp_hi,
+            'pack_temp_low(°C)': pack_temp_low,
+            'state_of_charge(%)': soc,
+            'pack_voltage(V)': pack_voltage,
+            'motor_temp(°C)': motor_temp,
+            'controller_temp(°C)': controller_temp,
+            'motor_speed(rpm)': motor_speed_rpm,
+            'battery_current(A)': battery_current,
+            'motor_current(A)': motor_current,
+            'ambient_temp(°C)': ambient_temp,
+            'odometer(km)': odometer,
             'modules_status': mods,
             'vehicle_state': 'disarmed'
         }
@@ -2372,7 +2372,7 @@ class Gen2:
                 pack_voltage=pack_voltage,
                 motor_temp=motor_temp,
                 controller_temp=controller_temp,
-                rpm=rpm,
+                rpm=motor_speed_rpm,
                 battery_current=battery_current,
                 mods=mods,
                 motor_current=motor_current,
@@ -2451,7 +2451,7 @@ class Gen2:
         return {
             'event': 'Sevcon Failed To Fully Precharge',
             'structured_data': {
-                'capacitor_voltage_volts': capacitor_volt,
+                'capacitor_voltage(V)': capacitor_volt,
             },
             'conditions': 'vcap: {vcap:.3f}V. Restarting Sevcon.'.format(vcap=capacitor_volt),
             # Explicit override: determine_log_level() would otherwise read
@@ -2476,8 +2476,8 @@ class Gen2:
         return {
             'event': 'BMS Disable - Low Bat',
             'structured_data': {
-                'pack_sum_voltage_volts': pack_sum_volt,
-                'capacity_percent': capacity,
+                'pack_sum_voltage(V)': pack_sum_volt,
+                'capacity(%)': capacity,
                 'module_number': module_number,
                 'status_flags': status,
                 'status_hex': f'0x{status:04x}',
@@ -2500,7 +2500,7 @@ class Gen2:
         return {
             'event': 'BMS Disable - High Temp' if message_type == 0x1e else 'BMS Disable - Low Temp',
             'structured_data': {
-                'pack_temp_celsius': pack_temp,
+                'pack_temp(°C)': pack_temp,
                 'module_number': module_number,
                 'status_flags': status,
                 'status_hex': f'0x{status:04x}',
@@ -2531,7 +2531,7 @@ class Gen2:
         structured_data = {'state': state}
         if state == 'high':
             structured_data['stage'] = state_code
-        structured_data['pack_temp_celsius'] = pack_temp
+        structured_data['pack_temp(°C)'] = pack_temp
         structured_data['module_number'] = module_number
         return {
             'event': event,
@@ -2552,8 +2552,8 @@ class Gen2:
         return {
             'event': 'High Mot/Ctrl',
             'structured_data': {
-                'motor_temp_celsius': motor_temp,
-                'controller_temp_celsius': controller_temp,
+                'motor_temp(°C)': motor_temp,
+                'controller_temp(°C)': controller_temp,
                 'raw_hex': bytes(x).hex(),
             },
             'conditions': 'Mot: {m}C, Ctrl: {c}C'.format(m=motor_temp, c=controller_temp)
@@ -2583,9 +2583,9 @@ class Gen2:
             'event': 'Exceeded Max Charge Amps',
             'structured_data': {
                 'module_number': module_number,
-                'exceeded_current_amps': exceeded,
-                'exceeded_seconds': seconds,
-                'current_at_log_amps': at_log,
+                'exceeded_current(A)': exceeded,
+                'exceeded_duration(sec)': seconds,
+                'current_at_log(A)': at_log,
             },
             'conditions': 'modnum: {m}, amps_exceeded: {e}, sec_exceeded: {s}, amps_at_log: {a}'.format(
                 m=module_number, e=exceeded, s=seconds, a=at_log)
@@ -2595,7 +2595,7 @@ class Gen2:
     def vehicle_state_telemetry(cls, x):
         """Parse Type 81 (0x51) - Vehicle State Telemetry (64 or 68 bytes).
 
-        This function used to read odometer_meters/odometer_km from bytes
+        This function used to read odometer(m)/odometer(km) from bytes
         0-3 and soc_raw/soc_percent from bytes 4-7. Both are wrong: bytes
         0-3 are the entry's own sub-second timestamp fraction and bytes 4-5
         are the same sequence/marker prefix every FST entry type shares
@@ -2648,10 +2648,10 @@ class Gen2:
 
         structured_data = {'vehicle_state': state}
         structured_data.update(prefix)
-        structured_data['temperature_1_celsius'] = temp1
-        structured_data['temperature_2_celsius'] = temp2
-        structured_data['temperature_3_celsius'] = temp3
-        structured_data['temperature_4_celsius'] = temp4
+        structured_data['temperature_1(°C)'] = temp1
+        structured_data['temperature_2(°C)'] = temp2
+        structured_data['temperature_3(°C)'] = temp3
+        structured_data['temperature_4(°C)'] = temp4
         structured_data['raw_hex'] = bytes(x).hex()
 
         conditions = (
@@ -2695,8 +2695,8 @@ class Gen2:
 
         # Create structured data
         structured_data = {
-            'odometer_meters': odometer_m,
-            'odometer_km': odometer_km,
+            'odometer(m)': odometer_m,
+            'odometer(km)': odometer_km,
             'sensor_1_value': sensor1,
             'sensor_2_value': sensor2,
             'sensor_3_value': sensor3,
@@ -4284,7 +4284,7 @@ class LogData(object):
                 # Every check below is an unchanged substring match from the
                 # original version of this function, preserved as-is,
                 # including its pre-existing false-positive matches (e.g.
-                # 'max_current_amps' or 'voltage_max' read 'ma' out of "max"
+                # 'max_current(A)' or 'voltage_max' read 'ma' out of "max"
                 # and render as milliamps on production today; not this
                 # task's bug to fix, left alone so this change touches
                 # nothing it wasn't asked to). The one exception is the
@@ -4326,7 +4326,13 @@ class LogData(object):
                     if key == 'raw_hex':
                         formatted_pairs.append(format_structured_value(key, value))
                         continue
-                    readable_key = key.replace('_', ' ').title()
+                    readable_key = key
+                    if '_' in key:
+                        matches = re.match(r'^(.*)(\(.*\))$', key) # label(unit) pattern
+                        if matches:
+                            readable_key = matches.group(1).replace('_', ' ').title() + ' ' + matches.group(2)
+                        else:
+                            readable_key = key.replace('_', ' ').title()
                     formatted_pairs.append(f"{readable_key}: {format_structured_value(key, value)}")
 
                 if structured_data.get('bytes_corrupted'):
