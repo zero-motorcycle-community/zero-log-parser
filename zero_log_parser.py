@@ -4365,7 +4365,20 @@ class LogData(object):
             else:
                 # Check for two log formats:
                 log_version_code = log.unpack('uint8', 0x4)
-                if log_version_code == 0xb6:
+                # The layout tag is c0 c0 c0 c0 at 0x300, not byte 0x4.
+                # Byte 0x4 is a per-pack value: it is constant for a given
+                # pack and follows the pack's age (0 of 869 distinct packs
+                # show more than one value), so it is not a format revision.
+                # Every classic BMS file with the tag has the REV1 layout
+                # (board serial at 0x310, pack serial at 0x331): 1,495
+                # unique files carry it, byte 0x4 = 0xde in 809, 0xca in
+                # 399, 0xd4 in 285 and 0xe8 in 2. Before this check the
+                # 0xca/0xd4/0xe8 files (686) fell through to the REV0
+                # offsets and printed garbage. 0 of 598 0xb6 files carry
+                # the tag.
+                if log.raw()[0x300:0x304] == b'\xc0\xc0\xc0\xc0':
+                    log_version = REV1
+                elif log_version_code == 0xb6:
                     log_version = REV0
                 elif log_version_code == 0xde:
                     log_version = REV1
@@ -4375,8 +4388,19 @@ class LogData(object):
                     logger.warning("Unknown Log Format: %s", log_version_code)
                 sys_info['Initial date'] = log.unpack_str(0x12, count=20)
                 if log_version == REV0:
-                    sys_info['BMS serial number'] = log.unpack_str(0x300, count=21)
-                    sys_info['Pack serial number'] = log.unpack_str(0x320, count=8)
+                    # Same idea as the REV1 shape gate below. REV0 board
+                    # serials have the form YYYY_bms_xxxxxx_NNNNN, so the
+                    # underscore is allowed here; pack serials never contain
+                    # one. Anything else at these offsets is log text, binary
+                    # or blank from a damaged or shifted header (33 unique
+                    # files: 26 board and 28 pack values) and is shown as
+                    # 'Unknown'. No serial-shaped value is affected.
+                    board_serial = log.unpack_str(0x300, count=21)
+                    pack_serial = log.unpack_str(0x320, count=8)
+                    sys_info['BMS serial number'] = (
+                        board_serial if re.fullmatch(r'[A-Za-z0-9_-]{4,}', board_serial) else 'Unknown')
+                    sys_info['Pack serial number'] = (
+                        pack_serial if re.fullmatch(r'[A-Za-z0-9-]{4,}', pack_serial) else 'Unknown')
                 elif log_version == REV1:
                     # Board serial: REV1's header carries the same 16-byte
                     # binary block REV0 also has (a counter/pointer run, not
