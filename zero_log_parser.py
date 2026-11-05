@@ -522,6 +522,7 @@ class LogFile:
         self._data = bytearray()
         self.reload()
         self.log_type = self.get_log_type()
+        self.has_classic_vin = self.get_has_classic_vin()
 
     def reload(self):
         with open(self.file_path, 'rb') as f:
@@ -591,6 +592,23 @@ class LogFile:
 
     def is_unknown(self):
         return self.log_type == self.log_type_unknown
+
+    def get_has_classic_vin(self):
+        """True if a real, FMVSS 565 checksum-valid VIN sits at either
+        known classic-layout offset (0x240 or 0x252), independent of
+        get_log_type()'s own fragile magic-string/filename detection.
+        Guarded by size the same way get_version_and_header()'s own
+        _legacy_vin_present() is: these offsets are only meaningful, and
+        only safe to read, on the classic 262144-byte layout. A file
+        this returns True for is, by construction, one
+        get_version_and_header() would also classify REV0/REV1 (it uses
+        the same two offsets to do so) - this only exists so dispatch
+        can use that same fact when log_type's own detection missed it."""
+        if len(self._data) < 0x252 + vin_length:
+            return False
+        v0 = self.unpack_str(0x240, count=vin_length)
+        v1 = self.unpack_str(0x252, count=vin_length)
+        return is_valid_vin_checksum(v0) or is_valid_vin_checksum(v1)
 
     def get_filename_vin(self):
         basename = os.path.basename(self.file_path)
@@ -1090,6 +1108,138 @@ class Gen2:
             'event': 'Chassis Isolation Fault',
             'structured_data': structured_data,
             'conditions': legacy_conditions
+        }
+
+    @classmethod
+    def mbb_throttle_enable_wire_disable(cls, x):
+        """Type 0x10 in MBB files only: "BMS Throt En Wire Disable  vpack =
+        %lumV, thr_en = %lumV", 8 bytes: uint32 LE vpack mV, uint32 LE
+        thr_en mV. Classic MBB firmware's own name for this type id, a
+        namespace collision with the BMS-side 0x10 (bms_state, "Entering"/
+        "Exiting Hibernate") - the two decoders differ, and which one runs
+        depends on the file's own log_type, resolved in _entry_parsers()."""
+        if len(x) != 8:
+            return cls.unhandled_entry_format(0x10, x)
+        vpack_volt = convert_mv_to_v(BinaryTools.unpack('uint32', x, 0x00))
+        thr_en_volt = convert_mv_to_v(BinaryTools.unpack('uint32', x, 0x04))
+        return {
+            'event': 'BMS Throt En Wire Disable',
+            'structured_data': {
+                'vpack_voltage_volts': vpack_volt,
+                'thr_en_voltage_volts': thr_en_volt,
+            },
+            'conditions': 'vpack: {v:.3f}V, thr_en: {t:.3f}V'.format(v=vpack_volt, t=thr_en_volt),
+        }
+
+    @classmethod
+    def mbb_throttle_enable_wire_reenable(cls, x):
+        """Type 0x11 in MBB files only: "BMS Throt Wire Re-enable   vpack =
+        %lumV, thr_en = %lumV", same 8-byte layout as
+        mbb_throttle_enable_wire_disable(). Namespace collision with the
+        BMS-side 0x11 (bms_isolation_fault, "Chassis Isolation Fault");
+        routed by log_type in _entry_parsers()."""
+        if len(x) != 8:
+            return cls.unhandled_entry_format(0x11, x)
+        vpack_volt = convert_mv_to_v(BinaryTools.unpack('uint32', x, 0x00))
+        thr_en_volt = convert_mv_to_v(BinaryTools.unpack('uint32', x, 0x04))
+        return {
+            'event': 'BMS Throt Wire Re-enable',
+            'structured_data': {
+                'vpack_voltage_volts': vpack_volt,
+                'thr_en_voltage_volts': thr_en_volt,
+            },
+            'conditions': 'vpack: {v:.3f}V, thr_en: {t:.3f}V'.format(v=vpack_volt, t=thr_en_volt),
+        }
+
+    @classmethod
+    def mbb_system_information(cls, x):
+        """Type 0xfb "System Information". LOG_STRUCTURE.md documents this
+        as an identifier, VIN, serial numbers and firmware version, once
+        per log session, decoded here as a regular entry-stream payload
+        rather than a fixed file offset - the same data
+        the Gen3 header decode already reads via `get_version_and_header()`
+        for files where its own two candidate offsets validate, now
+        reachable through the entry stream instead.
+
+        Written by both MBB and BMS firmware under this same type id
+        with genuinely different payloads, confirmed against real
+        logs rather than assumed from the field names: MBB's copy
+        carries the vehicle VIN behind a 4-byte 'MBB\\0' self-identifier;
+        BMS's carries no VIN anywhere in the payload, a 'BMS\\0'
+        identifier instead, and its own board serial/firmware part
+        number in different field positions. Only the MBB shape is
+        decoded here. Gated on the payload's own identifier bytes, not
+        the file's log_type, so a genuinely-MBB 0xfb entry inside an
+        Unknown Type file still decodes without a separate file-level
+        check; a 'BMS\\0'-identified or unrecognized payload falls back
+        to the existing raw-hex report unchanged, matching
+        _entry_parsers()'s file-type-aware convention for 0x10/0x11
+        without needing log_type threaded in here too, since this entry
+        identifies its own writer directly.
+
+        Field offsets shift by one byte together (0 or +1, mirroring
+        the Gen3 header decode's own 0x29/0x2A search) depending on
+        firmware variant. A separate hash-style 'Firmware build' field
+        the Gen3 header decode also reads is deliberately not decoded
+        here: confirmed on 7 real files, its position drifts relative to
+        a preceding variable-length field whenever that field's raw
+        bytes need escape-byte unstuffing - a narrow, real gap, not
+        implemented rather than guessed at.
+        """
+        shift = None
+        for candidate_shift in (0, 1):
+            offset = 6 + candidate_shift
+            if bytes(x[offset:offset + 4]) == b'MBB\x00':
+                shift = candidate_shift
+                break
+        if shift is None:
+            return cls.unhandled_entry_format(0xfb, x)
+
+        try:
+            vin_candidate = BinaryTools.unpack_str(x, 34 + shift, count=vin_length)
+        except Exception:
+            return cls.unhandled_entry_format(0xfb, x)
+        if not is_valid_vin_checksum(vin_candidate):
+            return cls.unhandled_entry_format(0xfb, x)
+        vin = vin_candidate.upper()
+
+        structured_data = {'vin': vin}
+
+        try:
+            model = BinaryTools.unpack_str(x, 18 + shift, count=16)
+            structured_data['model'] = model if model and BinaryTools.is_printable(model) else 'Unknown'
+        except Exception:
+            structured_data['model'] = 'Unknown'
+
+        try:
+            serial = BinaryTools.unpack_str(x, 53 + shift, count=16)
+            structured_data['serial_number'] = serial if serial and BinaryTools.is_printable(serial) else 'Unknown'
+        except Exception:
+            structured_data['serial_number'] = 'Unknown'
+
+        try:
+            fw_version = BinaryTools.unpack_str(x, 85 + shift, count=16)
+            structured_data['firmware_version'] = fw_version if fw_version and BinaryTools.is_printable(fw_version) else 'Unknown'
+        except Exception:
+            structured_data['firmware_version'] = 'Unknown'
+
+        try:
+            structured_data['board_rev'] = BinaryTools.unpack('uint8', x, 94 + shift)
+        except Exception:
+            structured_data['board_rev'] = 'Unknown'
+
+        try:
+            structured_data['firmware_rev'] = BinaryTools.unpack('uint8', x, 96 + shift)
+        except Exception:
+            structured_data['firmware_rev'] = 'Unknown'
+
+        conditions = 'VIN: {vin}, Serial: {serial}, Firmware: {fw}'.format(
+            vin=vin, serial=structured_data['serial_number'], fw=structured_data['firmware_version'])
+
+        return {
+            'event': 'System Information',
+            'structured_data': structured_data,
+            'conditions': conditions,
         }
 
     @classmethod
@@ -1915,6 +2065,82 @@ class Gen2:
             'event': 'Queue Full',
             'conditions': (f"Queue {queue_name}: a={structured_data['value_a']}, "
                            f"b={structured_data['value_b']}"),
+            'structured_data': structured_data
+        }
+
+    # Entry type 0x4E: FST/Gen3 firmware build info, the same role as the
+    # classic MBB's already-decoded type 0x32 (Gen2.firmware_build_info):
+    # a build date/time string followed by a flash bank identifier
+    # ("banka"/"bankb", the same two literal values 0x32 and the MBB
+    # firmware image strings use). Payloads are
+    # 60 bytes (with a trailing build identifier after the bank field) or
+    # 58 bytes (without it) - never confirmed to occur past those, so both
+    # are gated exactly. Layout: the shared 6-byte prefix (see
+    # fst_entry_prefix), two u16 LE values at 6-7/8-9 of unconfirmed
+    # meaning, then a NUL-terminated ASCII date string starting at offset
+    # 10, in one of two formats seen (older C-style "Sep 20 2019
+    # 16:26:26", newer "2021-11-08_134947"), then zero padding, then
+    # "banka" or "bankb" (NUL-terminated), then - on the 60-byte form only
+    # - a short hex-shaped build identifier (NUL-terminated). Confirmed at
+    # full population scale: every one of 41 real MBB entries (37 of 60
+    # bytes, 4 of 58) parses a date and finds a bank string; of 1,030 raw
+    # entries of this type across all real logs checked (most of them
+    # marker-corrupted noise in the 131,328-byte BMS page format, the same
+    # class of artifact seen in
+    # 0x4B-0x4D), exactly these same 41 pass every gate below and 0 others
+    # do - the gates are self-identifying, no log_type check needed.
+    GEN3_BUILD_DATE_FORMATS = ('%b %d %Y %H:%M:%S', '%Y-%m-%d_%H%M%S')
+    GEN3_BUILD_BANK_RE = re.compile(rb'bank[ab]\x00')
+
+    @classmethod
+    def gen3_firmware_build_info(cls, x):
+        if len(x) not in (58, 60):
+            return cls.unhandled_entry_format(0x4e, x)
+
+        prefix = cls.fst_entry_prefix(x)
+        if prefix['subsecond_us'] > cls.FST_SUBSECOND_MAX_US:
+            return cls.unhandled_entry_format(0x4e, x)
+
+        date_end = x.find(b'\x00', 10)
+        if date_end == -1 or date_end == 10:
+            return cls.unhandled_entry_format(0x4e, x)
+        try:
+            date_str = bytes(x[10:date_end]).decode('ascii')
+        except UnicodeDecodeError:
+            return cls.unhandled_entry_format(0x4e, x)
+
+        build_time = None
+        for fmt in cls.GEN3_BUILD_DATE_FORMATS:
+            try:
+                build_time = datetime.strptime(date_str, fmt)
+                break
+            except ValueError:
+                continue
+        if build_time is None:
+            return cls.unhandled_entry_format(0x4e, x)
+
+        match = cls.GEN3_BUILD_BANK_RE.search(bytes(x[date_end:]))
+        if not match:
+            return cls.unhandled_entry_format(0x4e, x)
+        bank_start = date_end + match.start()
+        flash_bank = bytes(x[bank_start:bank_start + 5]).decode('ascii')
+
+        structured_data = dict(prefix)
+        structured_data['build_date'] = build_time.strftime(ZERO_TIME_FORMAT)
+        structured_data['flash_bank'] = flash_bank
+        after_bank = bytes(x[bank_start + 6:])
+        build_id_raw = after_bank.split(b'\x00')[0]
+        if build_id_raw and all(32 <= c < 127 for c in build_id_raw):
+            structured_data['build_id'] = build_id_raw.decode('ascii')
+        structured_data['raw_hex'] = bytes(x).hex()
+
+        conditions = f"Built {structured_data['build_date']}, {flash_bank}"
+        if 'build_id' in structured_data:
+            conditions += f", {structured_data['build_id']}"
+
+        return {
+            'event': 'Firmware Build Info',
+            'conditions': conditions,
             'structured_data': structured_data
         }
 
@@ -2841,12 +3067,23 @@ class Gen2:
         }
 
     @classmethod
-    def _entry_parsers(cls):
+    def _entry_parsers(cls, log_type=None):
         """The message_type -> decoder dict parse_entry() dispatches through.
         Factored out (pure extraction, no behavior change) so
         collect_paged_bms_entries() can reuse the exact same dispatch table
-        rather than duplicating it."""
-        return {
+        rather than duplicating it.
+
+        One shared table across MBB and BMS files, with a narrow,
+        explicit override for the two type ids the classic MBB and BMS
+        firmwares both use for unrelated events:
+        0x10/0x11 decode as BMS Hibernate /
+        Chassis Isolation Fault by default (log_type omitted, 'BMS', or
+        'Unknown Type' - the existing, unchanged behavior for anything not
+        confirmed MBB), and as the MBB firmware's own BMS Throt En/Re-
+        enable Wire events only when log_type is definitely 'MBB'
+        (LogFile.log_type_mbb). Every other type id is unaffected by
+        log_type."""
+        parsers = {
             # Unknown entry types to be added when defined: type, length, source, example
             0x01: cls.board_status,
             # 0x02: unknown, 2, 6350_MBB_2016-04-12, 0x02 0x2e 0x11 ???
@@ -2898,13 +3135,19 @@ class Gen2:
             0x4b: lambda m: cls.state_snapshot_dispatch(0x4b, m),  # Type 75
             0x4c: lambda m: cls.state_snapshot_dispatch(0x4c, m),  # Type 76
             0x4d: lambda m: cls.state_snapshot_dispatch(0x4d, m),  # Type 77
+            0x4e: cls.gen3_firmware_build_info,  # Type 78
             0x4f: cls.queue_full,               # Type 79
             0x51: cls.vehicle_state_telemetry,  # Type 81
             0x52: lambda m: cls.vehicle_state_telemetry_tier(0x52, m),  # Type 82
             0x53: lambda m: cls.vehicle_state_telemetry_tier(0x53, m),  # Type 83
             0x54: cls.sensor_data,              # Type 84
+            0xfb: cls.mbb_system_information,   # Type 251
             0xfd: cls.debug_message
         }
+        if log_type == LogFile.log_type_mbb:
+            parsers[0x10] = cls.mbb_throttle_enable_wire_disable
+            parsers[0x11] = cls.mbb_throttle_enable_wire_reenable
+        return parsers
 
     # The FST/Gen3 BMS page format (131,328-byte files; see
     # analysis/pattern_00f0ff00_entries_and_ecuid_outliers.md): every
@@ -3102,7 +3345,7 @@ class Gen2:
             return 0
 
     @classmethod
-    def collect_paged_bms_entries(cls, buf, logger, timezone_offset=None, verbosity_level=1):
+    def collect_paged_bms_entries(cls, buf, logger, timezone_offset=None, verbosity_level=1, log_type=None):
         """Marker-aware entry walk for the FST/Gen3 BMS page format
         (is_paged_bms_format()). Builds the same (sort_timestamp,
         entry_payload, entry_num) list LogData._collect_and_process_entries'
@@ -3137,9 +3380,18 @@ class Gen2:
         that was never written (all-0xff) - is left exactly as the normal
         walk already handles it. No byte is reconstructed or guessed at
         anywhere in this function.
+
+        log_type is threaded through to _entry_parsers() for the same
+        0x10/0x11 file-type routing parse_entry() applies.
+        This walker only ever runs on the
+        131,328-byte FST/Gen3 BMS page format (is_paged_bms_format()),
+        which is BMS-only in every file checked, so passing 'BMS' or
+        omitting log_type has the same effect in practice; it is threaded
+        through anyway so the two walkers stay consistent rather than one
+        silently depending on a platform fact the other doesn't rely on.
         """
         n = len(buf)
-        parsers = cls._entry_parsers()
+        parsers = cls._entry_parsers(log_type)
 
         # Pass 1: find every entry's (start, length) exactly as the normal
         # resync walk does - same header search, same zero-length handling
@@ -3240,9 +3492,15 @@ class Gen2:
         return collected
 
     @classmethod
-    def parse_entry(cls, log_data, address, unhandled, logger, timezone_offset=None, verbosity_level=1):
+    def parse_entry(cls, log_data, address, unhandled, logger, timezone_offset=None, verbosity_level=1, log_type=None):
         """
         Parse an individual entry from a LogFile into a human readable form
+
+        log_type (LogFile.log_type_mbb / log_type_bms / log_type_unknown,
+        or None) routes the handful of type ids the classic MBB and BMS
+        firmwares both use for unrelated events - currently 0x10/0x11 -
+        to the right decoder. Omitting it keeps the pre-existing,
+        BMS-decoder behavior. See _entry_parsers().
         """
         try:
             header = log_data[address]
@@ -3274,7 +3532,7 @@ class Gen2:
         message_type = cls.type_from_block(unescaped_block)
         message = unescaped_block[0x05:]
 
-        parsers = cls._entry_parsers()
+        parsers = cls._entry_parsers(log_type)
         entry_parser = parsers.get(message_type)
         try:
             if entry_parser:
@@ -3563,6 +3821,18 @@ class LogData(object):
 
         processed_entries = []
 
+        # The dispatch-relevant type: the file's own log_type, upgraded
+        # to MBB when log_type's own filename/magic-string detection
+        # landed on Unknown Type but a real, checksum-valid VIN at a
+        # known classic offset proves the content is classic MBB anyway
+        # (LogFile.has_classic_vin).
+        # Never downgrades a definite BMS or MBB call; only fills the
+        # Unknown Type gap where a stronger, independent structural
+        # signal already exists.
+        dispatch_log_type = self.log_file.log_type
+        if dispatch_log_type == LogFile.log_type_unknown and self.log_file.has_classic_vin:
+            dispatch_log_type = LogFile.log_type_mbb
+
         if self.log_version < REV2 or self.log_version == REV3:
             # Handle REV0/REV1/REV3 formats - collect and sort entries
             collected_entries = []
@@ -3579,14 +3849,15 @@ class LogData(object):
                 # matter how that loop is tuned.
                 collected_entries = Gen2.collect_paged_bms_entries(
                     self.entries, logger, timezone_offset=self.timezone_offset,
-                    verbosity_level=verbosity_level)
+                    verbosity_level=verbosity_level, log_type=dispatch_log_type)
             elif hasattr(self, 'entries_count'):
                 for entry_num in range(self.entries_count):
                     try:
                         (length, entry_payload, unhandled) = Gen2.parse_entry(self.entries, read_pos,
                                                                               0,  # unhandled counter
                                                                               timezone_offset=self.timezone_offset,
-                                                                              logger=logger, verbosity_level=verbosity_level)
+                                                                              logger=logger, verbosity_level=verbosity_level,
+                                                                              log_type=dispatch_log_type)
 
                         # Extract timestamp for sorting
                         time_str = entry_payload.get('time', '0')
@@ -3938,6 +4209,47 @@ class LogData(object):
                     sys_info['Firmware rev.'] = 'Unknown'
                     sys_info['Board rev.'] = 'Unknown'
                     sys_info['Firmware build'] = 'Unknown'
+
+                # Prefer entry type 0xfb's own decode when it's available.
+                # The fixed offsets above read raw file bytes directly,
+                # with no concept of the entry-level byte-stuffing
+                # (unescape_block) every real entry decoder in this parser
+                # already accounts for; a literal 0xfe escape byte
+                # anywhere in the entry before a target offset silently
+                # shifts what gets read there, with no error and no
+                # degrade-to-'Unknown' - confirmed on 7 real files where
+                # this corrupted Board rev./Firmware rev. to 0/0.
+                # Gen2.mbb_system_information() reads the same
+                # already-unescaped payload parse_entry() builds for every
+                # other decoder, so it isn't exposed to this at all -
+                # reused directly here rather than duplicating its
+                # unescaping and shift-search logic. Only attempted when
+                # byte 0 is really 0xb2: that's the only case where entry
+                # 1 sits at address 0 (confirmed empirically - the other
+                # ring-buffer detection path, the 262144-byte
+                # \xa1\xa1\xa1\xa1 fallback, never has a live 0xfb entry
+                # findable this way). Falls back to the fixed-offset
+                # values above unchanged if byte 0 isn't 0xb2, if the
+                # entry there isn't really type 0xfb, or if
+                # mbb_system_information() itself declines (a BMS-side or
+                # unrecognized payload) - Firmware build is left as the
+                # fixed-offset method computed it either way, since the
+                # entry decoder doesn't read that field.
+                if log.raw()[0] == 0xb2:
+                    try:
+                        raw = log.raw()
+                        entry_length = raw[1]
+                        unescaped = BinaryTools.unescape_block(raw[2:entry_length])
+                        if len(unescaped) >= 6 and unescaped[0] == 0xfb:
+                            fb_entry = Gen2.mbb_system_information(unescaped[5:])
+                            fb_data = fb_entry.get('structured_data')
+                            if fb_data:
+                                sys_info['VIN'] = fb_data['vin']
+                                sys_info['Model'] = fb_data['model']
+                                sys_info['Board rev.'] = fb_data['board_rev']
+                                sys_info['Firmware rev.'] = fb_data['firmware_rev']
+                    except Exception:
+                        pass
 
             else:
                 # Legacy format - use original logic

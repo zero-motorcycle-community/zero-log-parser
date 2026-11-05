@@ -312,16 +312,50 @@ Offset | Length | Contents
 0x07   | 2      | B balance = H - L (mV)
 0x09   | 1      | BT BMS temp (°C)
 
-### `0x10` - BMS Hibernate
+### `0x10` and `0x11` - a namespace collision between BMS and classic MBB
+
+The classic BMS and MBB firmwares both write events at these two type
+ids, unrelated events, told apart by which file the entry is in
+(`Gen2._entry_parsers(log_type=...)`, dispatched from the file's own
+`LogFile.log_type`).
+An Unknown Type file (`LogFile.log_type` neither MBB nor BMS) is also
+routed to the MBB decoders when `LogFile.has_classic_vin` finds a real,
+checksum-valid VIN at the classic offset (0x240 or 0x252) - a narrow,
+file-level signal, safe on every real BMS log checked, that covers
+part of the Unknown Type gap.
+
+**BMS files:**
+
+#### `0x10` - BMS Hibernate
 Offset | Length | Contents
 ------ | :----: | --------
 0x00   | 1      | state 0 = 'Exiting', 1 = 'Entering'
 
-### `0x11` - BMS Chassis Isolation Fault
+#### `0x11` - BMS Chassis Isolation Fault
 Offset | Length | Contents
 ------ | :----: | --------
 0x00   | 4      | ohms to cell
 0x04   | 1      | cell
+
+**MBB files** (the classic MBB firmware's own renderer names, previously
+routed through the BMS decoders above regardless of file type - 5,733
+entries in the real logs checked):
+
+#### `0x10` - BMS Throt En Wire Disable
+Offset | Length | Contents
+------ | :----: | --------
+0x00   | 4      | vpack, mV (uint32 LE)
+0x04   | 4      | thr_en, mV (uint32 LE)
+
+#### `0x11` - BMS Throt Wire Re-enable
+Offset | Length | Contents
+------ | :----: | --------
+0x00   | 4      | vpack, mV (uint32 LE)
+0x04   | 4      | thr_en, mV (uint32 LE)
+
+Both decode identically (`vpack_voltage_volts`, `thr_en_voltage_volts`);
+only the event name differs. Any length other than 8 bytes falls back to
+the raw-hex report.
 
 ### `0x12` - BMS Reflash
 Offset | Length | Contents
@@ -697,19 +731,38 @@ Offset | Length | Contents
 ### `0xfb` (Type 251) - System Information
 *Added in 2025+ firmware - appears once per log session*
 
-**Purpose**: System identification and configuration data
+**Purpose**: System identification and configuration data. Decoded by
+`Gen2.mbb_system_information()`.
+
+Written by both MBB and BMS firmware under this same type id, with
+genuinely different payloads - confirmed against real logs,
+not assumed from the field names. A 4-byte identifier at payload
+offset 6 (or 7, see shift below) reads `MBB\0` on the MBB side and
+`BMS\0` on the BMS side; only the MBB shape is decoded today. BMS's
+copy carries no vehicle VIN anywhere in the payload, and instead
+reports a hardware descriptor (`"FST Mono"`), its own board serial and
+firmware part number, at different offsets than the MBB layout below.
+
+**MBB shape**, offsets relative to the entry's own payload (after the
+standard 5-byte type+timestamp header), shifted by +1 together on a
+small minority of files, the same firmware-variant ambiguity
+the Gen3 header decode's own `0x29`/`0x2A` whole-file search handles
+(not the same underlying cause, though):
 
 Offset | Length | Contents
 ------ | :----: | --------
-0x00   | ~110   | System information block
+0x06   | 4      | Identifier, `"MBB\0"`
+0x12   | 16     | Model (e.g. "SRF", null-terminated)
+0x22   | 17     | VIN, checksum-validated (e.g., "538DZAZ81PCN25719")
+0x35   | 16     | Serial number (e.g., "SJ0419ZER9901", null-terminated)
+0x55   | 16     | Firmware version (e.g., "40-08198", null-terminated)
+0x5E   | 1      | Board rev.
+0x60   | 1      | Firmware rev.
 
-**Decoded contents:**
-- **MBB identifier**: "MBB" string at start
-- **VIN number**: 17-character vehicle identification (e.g., "538DZAZ81PCN25719")
-- **Serial numbers**: Multiple system component serials (e.g., "RKT2302023467")
-- **Firmware version**: Version strings (e.g., "40-08198")
-- **System configuration**: Hardware IDs and setup parameters
-- **Checksums**: Data integrity verification values
+A further hash-style build field (e.g. `"dfb7a27"`) follows Firmware
+rev. but is not decoded: its position drifts relative to a preceding
+checksum-like field whenever that field's raw bytes need byte-stuffing
+removal, so it isn't a fixed offset the way the fields above are.
 
 **Example data extracted:**
 ```
