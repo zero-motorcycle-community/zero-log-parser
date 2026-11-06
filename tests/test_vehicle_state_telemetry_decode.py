@@ -1,17 +1,14 @@
 """
 Tests for entry type 0x51 ("Vehicle State Telemetry") in
-Gen2.vehicle_state_telemetry(), after the field fix in
-analysis/vst_field_fix.md: odometer_meters/odometer_km/soc_raw/soc_percent/
-ambient_temperature_* removed (never confirmed anywhere in this payload -
-bytes 0-3 are the entry's own sub-second timestamp fraction, bytes 4-5 the
-shared sequence/marker prefix, bytes 8-11 either always zero or an
-unidentified state-correlated enum, not temperature); temperature_1..4_celsius
-corrected to the real stride-4 offsets (48/52/56/60, not 48/49/50/51); byte 5
-exposed raw as marker, unlabeled.
+Gen2.vehicle_state_telemetry(): the state prefix, the marker byte, both
+payload lengths, and the four temperatures at 48/52/56/60 (tag+13..+25),
+which are read once, as signed 32-bit values with flag handling, under
+motor_temp_c, inverter_temp_c and pack_temperature_warmest_c/coldest_c.
+The earlier unsigned-byte copies temperature_1..4_celsius are gone.
 
 Same conventions as the other files in this directory: plain test_*
 functions, stdlib only, synthetic in-process payloads built from the
-confirmed layout, no dataset files checked in.
+confirmed layout, no real log files checked in.
 """
 
 import logging
@@ -37,9 +34,11 @@ def _payload(length=64, tag=b'RUN\x00', subsecond=76000, sequence=0x30, marker=0
         buf[5] = marker
     if length >= 39:
         buf[35:39] = tag
+        buf[10] = 0         # validity flag byte: both groups valid
+        buf[40] = 0         # temp_flags: no sensor failed
     for offset, value in zip((48, 52, 56, 60), temps):
-        if offset < length:
-            buf[offset] = value & 0xff
+        if offset + 4 <= length:
+            struct.pack_into('<i', buf, offset, value)
     return buf
 
 
@@ -56,8 +55,8 @@ def test_decodes_state_prefix_and_temperatures():
     assert sd['subsecond_us'] == 987000
     assert sd['sequence'] == 0x22
     assert sd['marker'] == 0xfc
-    assert (sd['temperature_1_celsius'], sd['temperature_2_celsius'],
-            sd['temperature_3_celsius'], sd['temperature_4_celsius']) == (30, 25, 18, 17)
+    assert (sd['motor_temp_c'], sd['inverter_temp_c'],
+            sd['pack_temperature_warmest_c'], sd['pack_temperature_coldest_c']) == (30, 25, 18, 17)
 
 
 def test_odometer_and_soc_fields_are_gone():
@@ -73,18 +72,25 @@ def test_marker_is_not_labelled_utc_offset_or_anything_else():
     assert not any('utc' in key.lower() or 'offset' in key.lower() for key in sd)
 
 
-def test_temperatures_read_from_the_stride_four_offsets_not_48_51():
-    payload = _payload(temps=(0, 0, 0, 0))
-    payload[48] = 55
-    payload[49] = 99  # the old (wrong) temp2 offset - must not be read
-    payload[50] = 98  # the old (wrong) temp3 offset - must not be read
-    payload[51] = 97  # the old (wrong) temp4 offset - must not be read
-    payload[52] = 44
-    payload[56] = 33
-    payload[60] = 22
+def test_unsigned_byte_temperature_copies_are_gone():
+    out = Gen2.vehicle_state_telemetry(_payload())
+    for n in range(1, 5):
+        assert 'temperature_%d_celsius' % n not in out['structured_data']
+    assert 'Temp1:' not in out['conditions'] and 'Temp4:' not in out['conditions']
+
+
+def test_negative_temperatures_read_signed_not_as_unsigned_bytes():
+    sd = Gen2.vehicle_state_telemetry(_payload(temps=(-7, -12, -3, -5)))['structured_data']
+    assert (sd['motor_temp_c'], sd['inverter_temp_c'],
+            sd['pack_temperature_warmest_c'], sd['pack_temperature_coldest_c']) == (-7, -12, -3, -5)
+
+
+def test_flagged_sensors_are_withheld_instead_of_shown_as_zero_or_255():
+    payload = _payload(temps=(0, -1, 0, -1))
+    payload[40] = 0x3c   # temp_flags: motor, inverter, pack highest and pack lowest failed
     sd = Gen2.vehicle_state_telemetry(payload)['structured_data']
-    assert (sd['temperature_1_celsius'], sd['temperature_2_celsius'],
-            sd['temperature_3_celsius'], sd['temperature_4_celsius']) == (55, 44, 33, 22)
+    assert (sd['motor_temp_c'], sd['inverter_temp_c'],
+            sd['pack_temperature_warmest_c'], sd['pack_temperature_coldest_c']) == (None, None, None, None)
 
 
 def test_all_eleven_known_states_decode_including_rev_and_park():
@@ -142,3 +148,41 @@ def test_parse_entry_dispatches_end_to_end():
     assert entry['event'] == 'Vehicle State (PWSU)'
     assert entry['message_type'] == '0x51'
     assert entry['structured_data']['vehicle_state'] == 'PWSU'
+
+
+def test_decodes_soc_pack_voltage_and_current():
+    payload = _payload(64, _tag('RUN'))
+    payload[26] = 64
+    struct.pack_into('<I', payload, 27, 105144)
+    struct.pack_into('<i', payload, 31, 12273)
+    sd = Gen2.vehicle_state_telemetry(payload)['structured_data']
+    assert sd['state_of_charge_percent'] == 64
+    assert sd['pack_voltage_volts'] == 105.144
+    assert sd['battery_current_amps'] == 12.273
+
+
+def test_current_is_signed_and_68_byte_variant_decodes():
+    payload = _payload(68, _tag('CHRG'))
+    struct.pack_into('<I', payload, 27, 99000)
+    struct.pack_into('<i', payload, 31, -13000)
+    sd = Gen2.vehicle_state_telemetry(payload)['structured_data']
+    assert sd['pack_voltage_volts'] == 99.0
+    assert sd['battery_current_amps'] == -13.0
+
+
+def test_hibernate_zero_fields_are_none_when_the_bms_flag_is_set():
+    payload = _payload(64, _tag('HIB'))
+    payload[10] = 0x60      # BMS validity group set: the BMS is not reporting
+    struct.pack_into('<I', payload, 27, 0)
+    struct.pack_into('<i', payload, 31, 0)
+    sd = Gen2.vehicle_state_telemetry(payload)['structured_data']
+    assert sd['pack_voltage_volts'] is None and sd['battery_current_amps'] is None
+
+
+def test_zero_voltage_with_the_bms_flag_clear_stays_a_raw_zero():
+    payload = _payload(64, _tag('RUN'))
+    payload[10] = 0         # BMS validity flag clear: report what was read
+    struct.pack_into('<I', payload, 27, 0)
+    struct.pack_into('<i', payload, 31, 0)
+    sd = Gen2.vehicle_state_telemetry(payload)['structured_data']
+    assert sd['pack_voltage_volts'] == 0.0 and sd['battery_current_amps'] == 0.0
