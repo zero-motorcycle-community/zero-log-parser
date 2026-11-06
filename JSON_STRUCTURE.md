@@ -214,6 +214,44 @@ The parser automatically detects and structures various telemetry data types. Be
 }
 ```
 
+#### Gen3 Vehicle State Telemetry (0x51 / 0x52 / 0x53)
+
+**Event:** `Vehicle State Telemetry` (0x52 / 0x53), `Riding` or `Vehicle State (<state>)` (0x51)  
+**Description:** Periodic telemetry on FST/Gen3 MBB logs. Layout in LOG_STRUCTURE.md  
+**Frequency:** Regular intervals in every state
+
+```json
+{
+  "telemetry_tier": "medium",
+  "state": "RUN",
+  "state_of_charge_percent": 77,
+  "pack_voltage_volts": 108.0,
+  "battery_current_amps": 9.0,
+  "motor_controller_data_valid": true,
+  "bms_data_valid": true,
+  "temp_flags": 0,
+  "dc_bus_voltage_volts": 104.0,
+  "dc_bus_current_amps": 25.0,
+  "motor_rpm": 3100,
+  "ambient_temperature_c": 23.5,
+  "motor_temp_c": 41,
+  "inverter_temp_c": 33,
+  "pack_temperature_warmest_c": 22,
+  "pack_temperature_coldest_c": 21,
+  "battery_12v_volts": 13.1,
+  "distance_km": 6268.4,
+  "speed_kmh": 56.25,
+  "range_km": 123.45
+}
+```
+
+- `temp_flags`: one "read failed" bit per temperature; a temperature whose bit is set is null
+- `ambient_temperature_c`: null when its sensor read failed, when the reading is outside -40..80 C, or when the firmware revision the entry was written under cannot be settled (the unit changed between firmware revisions)
+- `motor_temp_c`, `inverter_temp_c`: the firmware's Motor_Temp and Inverter_Temp
+- `speed_kmh`: null when the logged value is negative; `range_km`: null when the logged value is 0xFFFF
+- Values the controller or BMS group marks as not reporting are null
+- 0x51 entries carry `vehicle_state` instead of `telemetry_tier` and `state`; they no longer carry `temperature_1_celsius` .. `temperature_4_celsius` (unsigned-byte copies of the four named temperatures)
+
 #### Module Registration
 
 **Event:** `Module 00 Registered`  

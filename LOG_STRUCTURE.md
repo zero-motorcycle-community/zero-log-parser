@@ -634,39 +634,93 @@ Offset | Length | Contents
 0x36   | 2      | cell 27 mV
 0x38   | 2      | cell 28 mV
 
-### `0x51` (Type 81) - Vehicle State Telemetry
-*Added in 2025+ firmware - replaces periodic "Riding" entries*
+### `0x51` / `0x52` / `0x53` (Types 81-83) - Vehicle State Telemetry
+*FST/Gen3 MBB, periodic*
 
-**Purpose**: Primary vehicle telemetry data collection (151 entries per log session)
+Three sizes of one record: small (0x51, 64 or 68 bytes), medium (0x52, 81 or 85)
+and large (0x53, 95 or 99, plus a rare 93). Each size has a variant 4 bytes longer
+that adds the 12 V battery voltage. Field names and units follow John Myers'
+(atomicdog) Gen3 log format datasheet. Offsets below are relative to the 4-byte
+NUL-padded ASCII state tag (`RUN`, `STOP`, `HIB`, `PWSU`, `CHRG`, ...), which sits
+at payload offset 35 (0x51), 39 (0x52) or 43 (0x53). All values are little-endian.
 
-Offset | Length | Contents
+Offset (tag-relative) | Length | Contents
 ------ | :----: | --------
-0x00   | 68     | Vehicle state telemetry data (68 bytes total)
+-25    | 1      | Status flags (validity of the controller and BMS groups), shown as `motor_controller_data_valid` / `bms_data_valid`
+-21    | 3      | DC bus voltage, mV, shown as `dc_bus_voltage_volts`
+-17    | 4      | DC bus current, mA (s32), shown as `dc_bus_current_amps`
+-13    | 2      | Motor RPM, shown as `motor_rpm`
+-9     | 1      | State of charge, %
+-8     | 4      | Pack voltage, mV, shown as `pack_voltage_volts`
+-4     | 4      | Pack current, mA (s32), shown as `battery_current_amps`
+0      | 4      | State tag
++5     | 1      | `temp_flags`: one "read failed" bit per temperature (see below)
++9     | 4      | Ambient temperature (s32), shown as `ambient_temperature_c`; unit depends on firmware (see below)
++13    | 4      | Motor temperature, C (s32), shown as `motor_temp_c`
++17    | 4      | Inverter temperature, C (s32), shown as `inverter_temp_c`
++21    | 4      | Pack warmest cell temperature, C (s32), shown as `pack_temperature_warmest_c`
++25    | 4      | Pack coldest cell temperature, C (s32), shown as `pack_temperature_coldest_c`
++29    | 3      | 12 V battery voltage, uV, shown as `battery_12v_volts` (long variants only)
++35 / +31 | 3   | Distance counter, 0.1 km, shown as `distance_km` (0x52 / 0x53; long / short variant)
++39 / +35 | 4   | Speed, mm/h (s32), shown as `speed_kmh` = value / 1,000,000; null when negative
++43 / +39 | 2   | Estimated range, km x 100, shown as `range_km` = value / 100; null when 0xFFFF
 
-**Decoded structure (little-endian):**
-- Bytes 36-39: Vehicle state string ("TOP", "RUN", "STOP", "UN", "STRT", "PWSU", etc.)
-- Bytes 0-3: Odometer reading (meters)
-- Bytes 4-7: SOC raw value (State of Charge)
-- Bytes 8-11: Ambient temperature raw value
-- Bytes 12-15: Temperature sensor 1 (°C)
-- Bytes 16-19: Temperature sensor 2 (°C)  
-- Bytes 20-23: Temperature sensor 3 (°C)
-- Bytes 24-27: Temperature sensor 4 (°C)
-- Remaining bytes: Additional telemetry values (motor data, power readings)
+**Firmware-dependent fields.** The MBB firmware revision an entry was written
+under is the file header's revision, or, for an entry timestamped before a 0x4E
+firmware-updated entry in the same file, that update's previous revision.
 
-**Example JSON output:**
+- Status flags and `temp_flags` use one bit map on rev 18 and later and the same
+  map shifted up one bit on rev 13-17. A status bit that exists in only one map
+  (0x2A rev 18+, 0x94 rev 13-17) decides the map for that entry; otherwise the
+  firmware revision does.
+- `temp_flags`, rev 18+ map: bit 1 ambient, bit 2 motor, bit 3 inverter, bit 4
+  pack warmest, bit 5 pack coldest (rev 13-17: bits 2-6). A temperature whose bit
+  is set is null.
+- Ambient is C x 100 on rev 13-17 and 20+ and plain C on rev 18-19. A raw value
+  outside -40..60 is C x 100 on any firmware. A raw value inside it on rev 20+ is
+  C x 100 only when the same file holds an earlier C x 100 reading (with no update
+  to rev 18-19 in between); otherwise the scale is not settled and ambient is null.
+  A scaled value below -40 C or above 80 C is null.
+- Motor and inverter temperatures, DC bus fields, RPM and speed are null when the
+  controller group is not reporting; pack voltage and current are null when the
+  BMS group is not reporting.
+
+**Example JSON output** (0x52, 85 bytes, invented values):
 ```json
 {
-  "vehicle_state": "RUN",
-  "odometer_m": 688000,
-  "soc_raw": 426,
-  "ambient_temp_raw": 1966,
-  "temp_1": 23,
-  "temp_2": 24,
-  "temp_3": 24,
-  "temp_4": 22
+  "telemetry_tier": "medium",
+  "state": "RUN",
+  "subsecond_us": 400000,
+  "sequence": 3,
+  "marker": 1,
+  "state_of_charge_percent": 77,
+  "pack_voltage_volts": 108.0,
+  "battery_current_amps": 9.0,
+  "motor_controller_data_valid": true,
+  "bms_data_valid": true,
+  "temp_flags": 0,
+  "dc_bus_voltage_volts": 104.0,
+  "dc_bus_current_amps": 25.0,
+  "motor_rpm": 3100,
+  "ambient_temperature_c": 23.5,
+  "motor_temp_c": 41,
+  "inverter_temp_c": 33,
+  "pack_temperature_warmest_c": 22,
+  "pack_temperature_coldest_c": 21,
+  "battery_12v_volts": 13.1,
+  "distance_km": 6268.4,
+  "speed_kmh": 56.25,
+  "range_km": 123.45,
+  "raw_hex": "..."
 }
 ```
+
+0x51 entries also carry `vehicle_state` (instead of `telemetry_tier` and `state`),
+and their event is `Riding` in RUN and `Vehicle State (<state>)` otherwise. Earlier
+versions also emitted `temperature_1_celsius` .. `temperature_4_celsius` on 0x51:
+the same four bytes as the motor, inverter and pack temperatures, read as unsigned
+bytes (so -1 showed as 255 and flagged sensors as real readings). They are no longer
+emitted; use the named fields.
 
 ### `0x54` (Type 84) - Sensor Data
 *Added in 2025+ firmware - supplementary sensor telemetry*
@@ -713,20 +767,9 @@ Field | Value Range | Vehicle State Correlation | Interpretation
 - **HRG (Charging)**: sensor_1→low, sensor_2→high (charging mode)
 - **UN (Idle)**: High sensor values (monitoring/background)
 
-### `0x52` (Type 82) - Unknown Type 82
-*Added in 2025+ firmware - frequently occurring entry*
+### `0x52` / `0x53` (Types 82-83) - Vehicle State Telemetry
 
-**Purpose**: Unknown structured data (20 entries per log session)
-
-Offset | Length | Contents
------- | :----: | --------
-0x00   | variable | Complex structured data with vehicle state and sensor information
-
-**Observed patterns:**
-- Contains vehicle state strings ("RUN", "STOP")
-- Includes odometer and power readings
-- Mixed binary and text data
-- Requires further reverse engineering
+See `0x51` / `0x52` / `0x53` above.
 
 ### `0xfb` (Type 251) - System Information
 *Added in 2025+ firmware - appears once per log session*

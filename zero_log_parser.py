@@ -2076,8 +2076,10 @@ class Gen2:
     # 60 bytes (with a trailing build identifier after the bank field) or
     # 58 bytes (without it) - never confirmed to occur past those, so both
     # are gated exactly. Layout: the shared 6-byte prefix (see
-    # fst_entry_prefix), two u16 LE values at 6-7/8-9 of unconfirmed
-    # meaning, then a NUL-terminated ASCII date string starting at offset
+    # fst_entry_prefix), the previous and the new firmware revision as u16
+    # LE at 6-7 and 8-9 (the datasheet's firmware_updated record; equal
+    # when the entry is not an update; Gen3TelemetryFirmware reads them),
+    # then a NUL-terminated ASCII date string starting at offset
     # 10, in one of two formats seen (older C-style "Sep 20 2019
     # 16:26:26", newer "2021-11-08_134947"), then zero padding, then
     # "banka" or "bankb" (NUL-terminated), then - on the 60-byte form only
@@ -2299,6 +2301,284 @@ class Gen2:
             return result
         return cls.bms_cell_telemetry(message_type, x)
 
+    # Fields shared by the state-tagged telemetry family 0x51 / 0x52 / 0x53,
+    # all addressed relative to the start of the 4-byte state tag. The block in
+    # front of the tag is aligned from the tag, so it is at the same
+    # tag-relative offsets in every length variant:
+    #   tag-25  validity flag byte (see TELEMETRY_*_FLAG_MASK)
+    #   tag-21  u24 LE, mV, 0.1 V steps - DC bus voltage
+    #   tag-17  i32 LE, mA, 0.1 A steps - DC bus current
+    #   tag-13  u16 LE - motor RPM
+    #   tag+5   u8 - temp_flags, one "read failed" bit per temperature (see
+    #       TELEMETRY_TEMP_FLAG_BITS); a temperature whose bit is set is None
+    #   tag+9   i32 LE - ambient temperature. The unit depends on the MBB
+    #       firmware that wrote the entry: C x 100 on rev 13-17 and 20+,
+    #       plain C on rev 18-19 (see telemetry_ambient)
+    #   tag+13/17/21/25  i32 LE (range of an i8), C - motor temperature,
+    #       inverter temperature, pack warmest, pack coldest (signed 32-bit
+    #       words, see telemetry_extended_fields; read as unsigned bytes, a
+    #       negative temperature shows as 256 minus its magnitude). The
+    #       motor and inverter names are
+    #       the firmware's own (Motor_Temp, Inverter_Temp), from John
+    #       Myers' (atomicdog) Gen3 log format datasheet. Both belong to
+    #       the controller validity group (zero exactly when that flag is
+    #       set).
+    # The tail after the temperatures is present only in some variants; the
+    # offsets below are tag-relative and the four bytes of the tail that the
+    # short variants lack are the 12 V battery voltage and its pad, so every later
+    # field sits 4 bytes earlier in them:
+    #   +29 u24 LE, uV - battery_12v_volts, long variants only. The
+    #       battery-side sense point of the Gen3 12 V system: with the DC-DC
+    #       converter running it is the same node as the converter output,
+    #       but it stays meaningful when the converter is off. It does not
+    #       exist on legacy bikes or on the Gen3 short variants (firmware
+    #       13-30). It equals the "Battery" value in the MBB's
+    #       "Requesting/Stopping 12v charge" text (median difference 0, within
+    #       50 mV in 98.3% of 21,643 joined entries, correlation 0.994), not
+    #       that text's "DC-DC" value (about 0.29 V) or its "Combined" value
+    #       (0.73 V lower); and it sits on the ADC lattice
+    #       v = 5128 x k + 4864 uV (5.128 mV LSB, about 21 V full scale) in
+    #       46,966 of 46,967 entries.
+    #   +35/+31 u24 LE - cumulative distance counter, never decreases,
+    #       advances only while RUN; distance_km = counter x 0.1 km (the unit
+    #       is a decision, see TELEMETRY_DISTANCE_KM_PER_UNIT).
+    #   +39/+35 s32 LE - speed in mm/h (the datasheet's speed_mm_hr);
+    #       speed_kmh = value / 1e6. Every non-negative value is an exact
+    #       multiple of 18,750 (0.01875 km/h). A negative value is not a
+    #       speed and gives None.
+    #   +43/+39 u16 LE - estimated range in km x 100; range_km = value /
+    #       100, None when the value is 0xFFFF.
+    # message_type, payload length -> {field: tag-relative offset}
+    TELEMETRY_TAIL_FIELDS = {
+        (0x51, 68): {'aux': 29},
+        (0x52, 81): {'counter': 31, 'speed': 35, 'range': 39},
+        (0x52, 85): {'aux': 29, 'counter': 35, 'speed': 39, 'range': 43},
+        (0x53, 95): {'counter': 31, 'speed': 35, 'range': 39},
+        (0x53, 99): {'aux': 29, 'counter': 35, 'speed': 39, 'range': 43},
+    }
+    # Validity flag byte: two bit groups, set when the group's fields read as
+    # zero because the source is not reporting. Checked on 82,840 entries
+    # from real FST/Gen3 logs: the controller group (mask 0x1E) is set
+    # exactly when the DC bus voltage is zero (and then DC bus current, RPM,
+    # speed and the motor/controller temperatures are all zero too); the BMS
+    # group (mask 0xE0) is set only when the pack voltage and current are
+    # zero. A held, non-zero DC bus voltage while charging is NOT flagged.
+    TELEMETRY_CONTROLLER_FLAG_MASK = 0x1E
+    TELEMETRY_BMS_FLAG_MASK = 0xE0
+    # The status flag byte (tag-25) and temp_flags (tag+5) use one bit map on
+    # MBB firmware rev 18 and later and the same map shifted up one bit on rev
+    # 13-17. In the status byte, bits 1, 3 and 5 (0x2A) occur only in the rev
+    # 18+ map and bits 2, 4 and 7 (0x94) only in the shifted one, so an entry
+    # with a set status bit names its own map; checked on 96,610 entries
+    # against the firmware revision of the file and of 0x4E updates, 7
+    # exceptions, all shifted entries in rev 20-21 files.
+    TELEMETRY_STATUS_REV18_ONLY_BITS = 0x2A
+    TELEMETRY_STATUS_REV13_17_ONLY_BITS = 0x94
+    # temp_flags, rev 18+ map: bit -> temperature whose read failed. On rev
+    # 13-17 each bit sits one higher.
+    TELEMETRY_TEMP_FLAG_BITS = (
+        (1, 'ambient_temperature_c'),
+        (2, 'motor_temp_c'),
+        (3, 'inverter_temp_c'),
+        (4, 'pack_temperature_warmest_c'),
+        (5, 'pack_temperature_coldest_c'),
+    )
+    # Ambient: a raw value inside this range reads as a plausible temperature
+    # both as plain C and as C x 100 (-0.4 to 0.6 C), so only the firmware
+    # revision can settle it; a raw value outside it is C x 100 on every
+    # firmware, since it is no plausible plain C reading.
+    TELEMETRY_AMBIENT_PLAIN_RANGE = (-40, 60)
+    TELEMETRY_AMBIENT_PLAIN_REVS = (18, 19)
+    # A scaled ambient outside this range is withheld as implausible.
+    TELEMETRY_AMBIENT_PLAUSIBLE_C = (-40.0, 80.0)
+    TELEMETRY_RANGE_NOT_AVAILABLE = 0xFFFF
+    # Speed is logged in mm/h in steps of 18,750 (0.01875 km/h).
+    TELEMETRY_SPEED_STEP = 18750
+    TELEMETRY_SPEED_MM_PER_KM = 1e6
+    # Distance counter unit: 0.1 km. The data are consistent with it but do
+    # not pin it down independently (fitted 0.096 km per unit from 0.0599 mi,
+    # within the +-4% per-model spread).
+    TELEMETRY_DISTANCE_KM_PER_UNIT = 0.1
+    VEHICLE_STATE_TELEMETRY_LENGTHS = (64, 68)
+
+    @classmethod
+    def telemetry_pack_fields(cls, x, tag_offset):
+        """SOC, pack voltage and battery current for types 0x51 / 0x52 / 0x53
+        (u8 at tag-9, u32 LE mV at tag-8, i32 LE mA at tag-4). Pack voltage
+        and battery current are None when the BMS validity group (flag byte at
+        tag-25, mask TELEMETRY_BMS_FLAG_MASK) says the BMS is not reporting:
+        in every such entry both read zero, so the zero is a marker, not a
+        measurement (43,356 of 82,840 entries checked). SOC is
+        not in the group and is always reported. Returns (soc, volts, amps,
+        conditions fragment)."""
+        soc = BinaryTools.unpack('uint8', x, tag_offset - 9)
+        flags = BinaryTools.unpack('uint8', x, tag_offset - 25)
+        if flags & cls.TELEMETRY_BMS_FLAG_MASK:
+            volts = amps = None
+        else:
+            volts = BinaryTools.unpack('uint32', x, tag_offset - 8) / 1000.0
+            amps = BinaryTools.unpack('int32', x, tag_offset - 4) / 1000.0
+        v_text = 'n/a' if volts is None else f'{volts:.3f}'
+        i_text = 'n/a' if amps is None else f'{amps:.3f}'
+        return soc, volts, amps, f'SOC:{soc}%, Vpack:{v_text}V, I:{i_text}A'
+
+    @classmethod
+    def telemetry_temperature(cls, x, offset, limit, scale=1.0):
+        """A temperature stored as a little-endian int32 whose real range is
+        -limit .. limit-1 (before scaling); None when the word is outside it,
+        which only happens in entries whose tail was erased or overwritten."""
+        value = BinaryTools.unpack('int32', x, offset)
+        if not -limit <= value < limit:
+            return None
+        return value / scale if scale != 1.0 else value
+
+    @classmethod
+    def telemetry_flag_map_is_shifted(cls, status_flags, entry_rev):
+        """True when an entry's status and temp_flags bytes use the rev 13-17
+        bit map (the rev 18+ map shifted up one bit). A set status bit that
+        occurs in only one map decides; otherwise the firmware revision the
+        entry was written under decides (rev 18+ map when it is unknown)."""
+        rev18 = status_flags & cls.TELEMETRY_STATUS_REV18_ONLY_BITS
+        rev13 = status_flags & cls.TELEMETRY_STATUS_REV13_17_ONLY_BITS
+        if rev13 and not rev18:
+            return True
+        if rev18 and not rev13:
+            return False
+        return entry_rev is not None and 13 <= entry_rev <= 17
+
+    @classmethod
+    def telemetry_ambient(cls, raw, shifted_map, entry_rev, x100_seen_earlier):
+        """Ambient temperature in C from the raw tag+9 word, or None.
+
+        The unit depends on the MBB firmware that wrote the entry: C x 100 on
+        rev 13-17 and 20+, plain C on rev 18-19. A file's header revision is
+        the one at download time, so older entries in the same file can come
+        from an earlier revision (entry_rev already accounts for 0x4E firmware
+        updates in the file). The rule, per entry:
+          - a raw value outside TELEMETRY_AMBIENT_PLAIN_RANGE is C x 100 on
+            any firmware;
+          - inside it, the rev 13-17 bit map or rev 13-17 means C x 100, and
+            rev 18-19 means plain C;
+          - inside it on rev 20+, C x 100 when the same file already holds an
+            earlier C x 100 reading with no 0x4E downgrade to rev 18-19 in
+            between; otherwise the entry may be an older rev 18-19 entry and
+            the scale is not settled, so the value is withheld (None).
+        A scaled value outside TELEMETRY_AMBIENT_PLAUSIBLE_C is withheld too.
+        """
+        if raw is None:
+            return None
+        low, high = cls.TELEMETRY_AMBIENT_PLAIN_RANGE
+        if not low <= raw <= high:
+            value = raw / 100.0
+        elif shifted_map or (entry_rev is not None and 13 <= entry_rev <= 17):
+            value = raw / 100.0
+        elif entry_rev in cls.TELEMETRY_AMBIENT_PLAIN_REVS:
+            value = float(raw)
+        elif entry_rev is not None and entry_rev >= 20 and x100_seen_earlier:
+            value = raw / 100.0
+        else:
+            return None
+        low, high = cls.TELEMETRY_AMBIENT_PLAUSIBLE_C
+        if not low <= value <= high:
+            return None
+        return value
+
+    @classmethod
+    def telemetry_extended_fields(cls, message_type, x, tag_offset, firmware=None, timestamp=None):
+        """Decode the DC bus, RPM, temperature, validity and tail fields that
+        types 0x51 / 0x52 / 0x53 share. Returns (structured_data updates,
+        conditions fragment). Fields the controller group flags as not
+        reporting are None rather than zero, and so is a temperature whose
+        temp_flags bit is set.
+
+        firmware is the file's Gen3TelemetryFirmware and timestamp the
+        entry's raw timestamp; together they give the firmware revision the
+        entry was written under. Without them that revision is unknown."""
+        flags = BinaryTools.unpack('uint8', x, tag_offset - 25)
+        controller_ok = not (flags & cls.TELEMETRY_CONTROLLER_FLAG_MASK)
+        bms_ok = not (flags & cls.TELEMETRY_BMS_FLAG_MASK)
+
+        def ctl(value):
+            return value if controller_ok else None
+
+        if firmware is not None and timestamp is not None:
+            entry_rev = firmware.rev_at(timestamp)
+            x100_seen_earlier = firmware.x100_seen_before(timestamp)
+        else:
+            entry_rev, x100_seen_earlier = None, False
+        shifted_map = cls.telemetry_flag_map_is_shifted(flags, entry_rev)
+        temp_flags = BinaryTools.unpack('uint8', x, tag_offset + 5)
+        failed = {name for bit, name in cls.TELEMETRY_TEMP_FLAG_BITS
+                  if temp_flags >> (bit + 1 if shifted_map else bit) & 1}
+
+        def temperature(name, value):
+            return None if name in failed else value
+
+        dc_bus_mv = int.from_bytes(bytes(x[tag_offset - 21:tag_offset - 18]), 'little')
+        dc_bus_ma = BinaryTools.unpack('int32', x, tag_offset - 17)
+        rpm = BinaryTools.unpack('uint16', x, tag_offset - 13)
+        # The five temperatures are signed 32-bit words (tag+9, +13, +17, +21,
+        # +25), not narrower fields: whenever a temperature is negative the
+        # three bytes above its low byte are 0xff (every negative reading
+        # checked, with no counterexample that is not an erased or
+        # overwritten entry tail). A word that is not a plausible sign
+        # extension (an entry whose tail was erased to 0xff or overwritten by
+        # text) is withheld as None.
+        ambient_raw = cls.telemetry_temperature(x, tag_offset + 9, 32768)
+        ambient = cls.telemetry_ambient(ambient_raw, shifted_map, entry_rev, x100_seen_earlier)
+        motor_t = cls.telemetry_temperature(x, tag_offset + 13, 128)
+        inverter_t = cls.telemetry_temperature(x, tag_offset + 17, 128)
+        pack_warm_t = cls.telemetry_temperature(x, tag_offset + 21, 128)
+        pack_cold_t = cls.telemetry_temperature(x, tag_offset + 25, 128)
+
+        data = {
+            'motor_controller_data_valid': controller_ok,
+            'bms_data_valid': bms_ok,
+            'temp_flags': temp_flags,
+            'dc_bus_voltage_volts': ctl(dc_bus_mv / 1000.0),
+            'dc_bus_current_amps': ctl(dc_bus_ma / 1000.0),
+            'motor_rpm': ctl(rpm),
+            'ambient_temperature_c': temperature('ambient_temperature_c', ambient),
+            'motor_temp_c': ctl(temperature('motor_temp_c', motor_t)),
+            'inverter_temp_c': ctl(temperature('inverter_temp_c', inverter_t)),
+            'pack_temperature_warmest_c': temperature('pack_temperature_warmest_c', pack_warm_t),
+            'pack_temperature_coldest_c': temperature('pack_temperature_coldest_c', pack_cold_t),
+        }
+
+        def fmt(value, spec=''):
+            return 'n/a' if value is None else format(value, spec)
+
+        conditions = (
+            f"Vdc:{fmt(data['dc_bus_voltage_volts'], '.1f')}V, "
+            f"Idc:{fmt(data['dc_bus_current_amps'], '.1f')}A, "
+            f"RPM:{fmt(data['motor_rpm'])}, Tamb:{fmt(data['ambient_temperature_c'], '.2f')}C, "
+            f"Tmotor:{fmt(data['motor_temp_c'])}C, "
+            f"Tinverter:{fmt(data['inverter_temp_c'])}C, "
+            f"Tpack:{fmt(data['pack_temperature_warmest_c'])}/{fmt(data['pack_temperature_coldest_c'])}C"
+        )
+
+        tail = cls.TELEMETRY_TAIL_FIELDS.get((message_type, len(x)), {})
+        if 'aux' in tail:
+            aux_uv = int.from_bytes(bytes(x[tag_offset + tail['aux']:tag_offset + tail['aux'] + 3]), 'little')
+            data['battery_12v_volts'] = aux_uv / 1e6
+            conditions += f", Vbat12:{aux_uv / 1e6:.2f}V"
+        if 'counter' in tail:
+            at = tag_offset + tail['counter']
+            counter = int.from_bytes(bytes(x[at:at + 3]), 'little')
+            data['distance_km'] = round(counter * cls.TELEMETRY_DISTANCE_KM_PER_UNIT, 1)
+            conditions += f", Odo:{data['distance_km']:.1f}km"
+        if 'speed' in tail:
+            speed_mm_h = BinaryTools.unpack('int32', x, tag_offset + tail['speed'])
+            speed = None if speed_mm_h < 0 else speed_mm_h / cls.TELEMETRY_SPEED_MM_PER_KM
+            data['speed_kmh'] = ctl(speed)
+            conditions += f", Speed:{fmt(data['speed_kmh'])}km/h"
+        if 'range' in tail:
+            range_raw = BinaryTools.unpack('uint16', x, tag_offset + tail['range'])
+            data['range_km'] = None if range_raw == cls.TELEMETRY_RANGE_NOT_AVAILABLE else range_raw / 100.0
+            conditions += f", Range:{fmt(data['range_km'])}km"
+        conditions += f", Valid(ctrl/bms):{int(controller_ok)}/{int(bms_ok)}"
+        return data, conditions
+
     # Entry types 0x52 and 0x53: the medium and large tiers of the family
     # whose small tier is 0x51 (vehicle_state_telemetry). Same head layout as
     # 0x51 and as 0x4B-0x4D: the shared 6-byte prefix, then a block that
@@ -2306,8 +2586,8 @@ class Gen2:
     # NUL-padded ASCII state tag, so the tag sits at payload offset 35 / 39 /
     # 43 for 0x51 / 0x52 / 0x53. Each tier also comes in a variant 4 bytes
     # longer (0x52: 81 and 85 bytes; 0x53: 95 and 99, plus a rare 93).
-    # Only the tag and framing are decoded; every other byte is preserved in
-    # raw_hex. Evidence: analysis/fst_part2_unknown_types.md.
+    # The fields are decoded by telemetry_pack_fields and
+    # telemetry_extended_fields; the whole payload is also kept in raw_hex.
     # message_type -> (tier name, accepted payload lengths, state tag offset)
     TELEMETRY_TIERS = {
         0x52: ('medium', (81, 85), 39),
@@ -2317,15 +2597,18 @@ class Gen2:
         ['RUN', 'PWSU', 'CHRG', 'WAIT', 'STOP', 'HIB', 'WAKE', 'FWUP', 'STRT', 'REV', 'PARK'])
 
     @classmethod
-    def vehicle_state_telemetry_tier(cls, message_type, x):
+    def vehicle_state_telemetry_tier(cls, message_type, x, firmware=None, timestamp=None):
         """Types 0x52 / 0x53 - state-tagged telemetry, medium / large tier.
 
-        Decodes the tier, the state tag and the shared 6-byte prefix. The
-        fields between them and after the tag are unidentified (the layout
-        was mapped by shape only) and are kept in raw_hex. A payload whose
-        length is not one of the accepted variants, or whose tag is not one
-        of the known state names, falls back to the raw-hex report
-        unhandled_entry_format() already gives these types.
+        Decodes the tier, the state tag, the shared 6-byte prefix, the SOC /
+        pack voltage / battery current triple 0x51 also carries (u8 at
+        tag-9, u32 LE mV at tag-8, i32 LE mA at tag-4, see
+        telemetry_pack_fields) and the fields of telemetry_extended_fields,
+        all addressed relative to the tag so every length variant of both
+        tiers reads the same way. A payload whose length is not one of the
+        accepted variants, or whose tag is not one of the known state names,
+        falls back to the raw-hex report unhandled_entry_format() already
+        gives these types.
         """
         tier, lengths, tag_offset = cls.TELEMETRY_TIERS[message_type]
         if len(x) not in lengths:
@@ -2340,16 +2623,23 @@ class Gen2:
         if prefix['subsecond_us'] > cls.FST_SUBSECOND_MAX_US:
             return cls.unhandled_entry_format(message_type, x)
 
+        soc, pack_volts, pack_amps, pack_conditions = cls.telemetry_pack_fields(x, tag_offset)
+
         structured_data = {
             'telemetry_tier': tier,
             'state': state,
         }
         structured_data.update(prefix)
+        structured_data['state_of_charge_percent'] = soc
+        structured_data['pack_voltage_volts'] = pack_volts
+        structured_data['battery_current_amps'] = pack_amps
+        extended, extended_conditions = cls.telemetry_extended_fields(message_type, x, tag_offset, firmware, timestamp)
+        structured_data.update(extended)
         structured_data['raw_hex'] = bytes(x).hex()
 
         return {
             'event': 'Vehicle State Telemetry',
-            'conditions': f'State: {state}, tier: {tier}',
+            'conditions': f'State: {state}, tier: {tier}, {pack_conditions}, {extended_conditions}',
             'structured_data': structured_data
         }
 
@@ -2833,44 +3123,36 @@ class Gen2:
         }
 
     @classmethod
-    def vehicle_state_telemetry(cls, x):
+    def vehicle_state_telemetry(cls, x, firmware=None, timestamp=None):
         """Parse Type 81 (0x51) - Vehicle State Telemetry (64 or 68 bytes).
 
-        This function used to read odometer_meters/odometer_km from bytes
-        0-3 and soc_raw/soc_percent from bytes 4-7. Both are wrong: bytes
-        0-3 are the entry's own sub-second timestamp fraction and bytes 4-5
-        are the same sequence/marker prefix every FST entry type shares
-        (Gen2.fst_entry_prefix); bytes 6-7 are always zero. No odometer or
-        state-of-charge value was found anywhere else in this payload
-        either (see analysis/vst_field_fix.md, which also checked bytes
-        10-11, previously read as part of a bogus "ambient_temperature_raw"
-        u32 at offset 8: byte 8-9 are always zero, byte 11 is always zero,
-        and byte 10 is a 7-value enum that correlates with vehicle_state
-        and varies within a single VIN's own files, ruling it out as a
-        per-vehicle hardware ID as well as a temperature reading).
-        Confirmed: this entry type does not carry odometer or SOC data.
-        Removed rather than repointed; kept in raw_hex like every other
-        unidentified byte in this payload.
+        Bytes 0-3 are the entry's own sub-second timestamp fraction and bytes
+        4-5 the sequence/marker prefix every FST entry type shares
+        (Gen2.fst_entry_prefix); bytes 6-7 are always zero.
 
-        Kept, corrected: temperature_1..4_celsius are real (see
-        vst_field_fix.md's per-VIN smoothness, physical-range and seasonal
-        checks), but the previous code read them at bytes 48-51 - the real
-        readings sit at a 4-byte stride, 48/52/56/60 (temp1 happened to
-        already be right); the previous temp2-4 read the zero-filled gap
-        bytes between them, matching the earlier finding that they were
-        zero in 99.97% of real entries.
+        SOC, pack voltage and battery current sit at payload 26 (u8), 27
+        (u32 LE, mV) and 31 (i32 LE, mA), immediately before the state tag
+        at 35: voltage 79.9-117.6 V, SOC/voltage correlation 0.98 per VIN,
+        charging current negative. In HIB the voltage and current are almost
+        always zero (98.3% / 98.4%). They are None, not zero, when the BMS
+        validity flag at tag-25 says the BMS is not reporting
+        (telemetry_pack_fields).
 
-        Byte 5 (marker) is exposed raw and unlabeled, same as every other
-        FST entry type - not confirmed to mean anything, including the
-        "UTC offset" idea floated for it, which remains open.
+        The temperatures at bytes 44/48/52/56/60 (tag+9..+25) are read as
+        signed 32-bit values with temp_flags handling by
+        telemetry_extended_fields (ambient_temperature_c, motor_temp_c,
+        inverter_temp_c, pack_temperature_warmest_c,
+        pack_temperature_coldest_c). Read as unsigned bytes, -1 C shows as
+        255 C and a failed sensor as a real 0 C reading.
 
-        Real payloads are 64 or 68 bytes (roughly even split); anything
-        else, including the 4-68 byte stray lengths seen in ~0.03% of raw
-        entries, falls back to the existing raw-hex report - consistent
-        with the length gates in state_snapshot/vehicle_state_telemetry_tier,
-        and with how little those stray lengths agree with any real shape.
+        Byte 5 (marker) is exposed raw and unlabeled, same as every other FST
+        entry type.
+
+        Real payloads are 64 or 68 bytes (roughly even split); anything else
+        falls back to the raw-hex report, consistent with the length gates in
+        state_snapshot/vehicle_state_telemetry_tier.
         """
-        if len(x) not in (64, 68):
+        if len(x) not in cls.VEHICLE_STATE_TELEMETRY_LENGTHS:
             return cls.unhandled_entry_format(0x51, x)
 
         tag_bytes = bytes(x[35:39])
@@ -2882,23 +3164,21 @@ class Gen2:
         if prefix['subsecond_us'] > cls.FST_SUBSECOND_MAX_US:
             return cls.unhandled_entry_format(0x51, x)
 
-        temp1 = BinaryTools.unpack('uint8', x, 48)
-        temp2 = BinaryTools.unpack('uint8', x, 52)
-        temp3 = BinaryTools.unpack('uint8', x, 56)
-        temp4 = BinaryTools.unpack('uint8', x, 60)
+        soc, pack_volts, pack_amps, pack_conditions = cls.telemetry_pack_fields(x, 35)
 
         structured_data = {'vehicle_state': state}
         structured_data.update(prefix)
-        structured_data['temperature_1_celsius'] = temp1
-        structured_data['temperature_2_celsius'] = temp2
-        structured_data['temperature_3_celsius'] = temp3
-        structured_data['temperature_4_celsius'] = temp4
+        structured_data['state_of_charge_percent'] = soc
+        structured_data['pack_voltage_volts'] = pack_volts
+        structured_data['battery_current_amps'] = pack_amps
+        extended, extended_conditions = cls.telemetry_extended_fields(0x51, x, 35, firmware, timestamp)
+        structured_data.update(extended)
         structured_data['raw_hex'] = bytes(x).hex()
 
         conditions = (
             f"State: {state}, "
-            f"Temp1: {temp1}°C, Temp2: {temp2}°C, "
-            f"Temp3: {temp3}°C, Temp4: {temp4}°C"
+            f"{pack_conditions}, "
+            f"{extended_conditions}"
         )
 
         # Determine event name based on state - riding states show as "Riding" for plotting compatibility
@@ -3566,6 +3846,112 @@ class Gen2:
         return length, entry, unhandled
 
 
+class Gen3TelemetryFirmware:
+    """The MBB firmware revision each 0x51 / 0x52 / 0x53 entry of one FST/Gen3
+    file was written under, for the fields whose meaning changed between
+    revisions (the ambient scale and the flag bit maps, see
+    Gen2.telemetry_ambient and Gen2.telemetry_flag_map_is_shifted).
+
+    The header revision is the one at download time. The file's 0x4E
+    firmware-updated entries (payload 6 u16 previous revision, payload 8 u16
+    new revision, from John Myers' (atomicdog) Gen3 log format datasheet)
+    mark where it changed: an entry timestamped before an update was written
+    under that update's previous revision. Timestamps, not file positions,
+    order the entries, because the log is a ring buffer whose oldest entries
+    can sit after newer ones in the file.
+
+    It also records the earliest timestamp of an ambient reading that can
+    only be C x 100 (raw value outside Gen2.TELEMETRY_AMBIENT_PLAIN_RANGE,
+    scaled value plausible), and the timestamps of 0x4E updates to rev
+    18-19, for the rev 20+ rule in Gen2.telemetry_ambient."""
+
+    TELEMETRY_TYPES = {'0x51': 0x51, '0x52': 0x52, '0x53': 0x53}
+
+    def __init__(self, header_rev, updates=(), first_x100_timestamp=None):
+        self.header_rev = header_rev if isinstance(header_rev, int) else None
+        # (timestamp, previous revision, new revision), newest first
+        self.updates = sorted(((t, p, n) for t, p, n in updates if p != n), reverse=True)
+        self.first_x100_timestamp = first_x100_timestamp
+        self.plain_rev_update_times = [t for t, p, n in self.updates
+                                       if n in Gen2.TELEMETRY_AMBIENT_PLAIN_REVS]
+
+    def rev_at(self, timestamp):
+        rev = self.header_rev
+        for update_time, previous, _new in self.updates:
+            if timestamp < update_time:
+                rev = previous
+        return rev
+
+    def x100_seen_before(self, timestamp):
+        first = self.first_x100_timestamp
+        if first is None or first > timestamp:
+            return False
+        return not any(first <= t <= timestamp for t in self.plain_rev_update_times)
+
+    @classmethod
+    def _tag_offset(cls, message_type):
+        return 35 if message_type == 0x51 else Gen2.TELEMETRY_TIERS[message_type][2]
+
+    @classmethod
+    def _decoded_telemetry(cls, payload):
+        """(message_type, payload bytes) for an entry the 0x51 / 0x52 / 0x53
+        decoder accepted, else None."""
+        message_type = cls.TELEMETRY_TYPES.get(payload.get('message_type'))
+        structured = payload.get('structured_data')
+        if message_type is None or not structured or 'motor_controller_data_valid' not in structured:
+            return None
+        return message_type, bytearray.fromhex(structured['raw_hex'])
+
+    @classmethod
+    def from_entries(cls, header_rev, payloads):
+        updates = []
+        first_x100 = None
+        low, high = Gen2.TELEMETRY_AMBIENT_PLAIN_RANGE
+        plausible_low, plausible_high = Gen2.TELEMETRY_AMBIENT_PLAUSIBLE_C
+        for payload in payloads:
+            timestamp = payload.get('original_timestamp')
+            if timestamp is None:
+                continue
+            structured = payload.get('structured_data') or {}
+            if payload.get('message_type') == '0x4E' and payload.get('event') == 'Firmware Build Info' \
+                    and 'raw_hex' in structured:
+                x = bytes.fromhex(structured['raw_hex'])
+                updates.append((timestamp, BinaryTools.unpack('uint16', x, 6), BinaryTools.unpack('uint16', x, 8)))
+                continue
+            decoded = cls._decoded_telemetry(payload)
+            if decoded is None:
+                continue
+            message_type, x = decoded
+            raw = Gen2.telemetry_temperature(x, cls._tag_offset(message_type) + 9, 32768)
+            if raw is not None and not low <= raw <= high and plausible_low <= raw / 100.0 <= plausible_high:
+                if first_x100 is None or timestamp < first_x100:
+                    first_x100 = timestamp
+        return cls(header_rev, updates, first_x100)
+
+    @classmethod
+    def redecode(cls, collected_entries, header_rev):
+        """Decode the 0x51 / 0x52 / 0x53 entries of collected_entries
+        ((sort_timestamp, entry, entry_num) tuples from one file) again with
+        the file's firmware context, replacing event, conditions and
+        structured_data in place."""
+        payloads = [entry for _sort, entry, _num in collected_entries]
+        firmware = cls.from_entries(header_rev, payloads)
+        for entry in payloads:
+            decoded = cls._decoded_telemetry(entry)
+            if decoded is None:
+                continue
+            message_type, x = decoded
+            timestamp = entry['original_timestamp']
+            if message_type == 0x51:
+                result = Gen2.vehicle_state_telemetry(x, firmware=firmware, timestamp=timestamp)
+            else:
+                result = Gen2.vehicle_state_telemetry_tier(message_type, x, firmware=firmware, timestamp=timestamp)
+            entry['event'] = result['event']
+            entry['conditions'] = result['conditions']
+            entry['structured_data'] = result['structured_data']
+        return firmware
+
+
 class Gen3:
     entry_data_fencepost = b'\x00\xb2'
     Entry = namedtuple('Gen3EntryType', ['event', 'time', 'conditions', 'uninterpreted', 'log_level', 'message_type'])
@@ -3898,6 +4284,16 @@ class LogData(object):
                     except Exception as e:
                         logger.warning(f'Error parsing entry {entry_num}: {e}')
                         break
+
+            # FST/Gen3 MBB telemetry: some fields depend on the firmware
+            # revision each entry was written under, which needs the whole
+            # file (header revision, 0x4E updates), so those entries are
+            # decoded again once the walk is done. Not for BMS files, whose
+            # header revision is a BMS firmware revision.
+            if self.log_version == REV3 and dispatch_log_type != LogFile.log_type_bms \
+                    and not Gen2.is_paged_bms_format(self.entries):
+                Gen3TelemetryFirmware.redecode(collected_entries, self.header_info.get('Firmware rev.'))
+
 
             # Apply timestamp interpolation before sorting
             collected_entries = Gen2.interpolate_missing_timestamps(collected_entries, logger)
@@ -4761,7 +5157,9 @@ class LogData(object):
                 # nothing it wasn't asked to). The one exception is the
                 # literal key 'marker', a new field introduced by the FST
                 # decoders (Gen2.fst_entry_prefix) that the same 'ma'
-                # substring would otherwise also catch.
+                # substring would otherwise also catch. Likewise 'temp_flags'
+                # (0x51-0x53), a bit field whose 'temp' would otherwise get a
+                # temperature unit.
                 key_lower = key.lower()
                 if 'percent' in key_lower:
                     return f"{value}%"
@@ -4773,7 +5171,7 @@ class LogData(object):
                     return f"{value}mV"
                 elif 'volts' in key_lower or 'voltage' in key_lower:
                     return f"{value}V"
-                elif 'celsius' in key_lower or 'temp' in key_lower:
+                elif key != 'temp_flags' and ('celsius' in key_lower or 'temp' in key_lower):
                     return f"{value}°C"
                 else:
                     return str(value)
