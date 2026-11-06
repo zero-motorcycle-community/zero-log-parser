@@ -2076,8 +2076,10 @@ class Gen2:
     # 60 bytes (with a trailing build identifier after the bank field) or
     # 58 bytes (without it) - never confirmed to occur past those, so both
     # are gated exactly. Layout: the shared 6-byte prefix (see
-    # fst_entry_prefix), two u16 LE values at 6-7/8-9 of unconfirmed
-    # meaning, then a NUL-terminated ASCII date string starting at offset
+    # fst_entry_prefix), the previous and the new firmware revision as u16
+    # LE at 6-7 and 8-9 (the datasheet's firmware_updated record; equal
+    # when the entry is not an update; Gen3TelemetryFirmware reads them),
+    # then a NUL-terminated ASCII date string starting at offset
     # 10, in one of two formats seen (older C-style "Sep 20 2019
     # 16:26:26", newer "2021-11-08_134947"), then zero padding, then
     # "banka" or "bankb" (NUL-terminated), then - on the 60-byte form only
@@ -2489,8 +2491,8 @@ class Gen2:
         reporting are None rather than zero, and so is a temperature whose
         temp_flags bit is set.
 
-        firmware (an object with rev_at() and x100_seen_before()) and
-        timestamp (the entry's raw timestamp) give the firmware revision the
+        firmware is the file's Gen3TelemetryFirmware and timestamp the
+        entry's raw timestamp; together they give the firmware revision the
         entry was written under. Without them that revision is unknown."""
         flags = BinaryTools.unpack('uint8', x, tag_offset - 25)
         controller_ok = not (flags & cls.TELEMETRY_CONTROLLER_FLAG_MASK)
@@ -3844,6 +3846,112 @@ class Gen2:
         return length, entry, unhandled
 
 
+class Gen3TelemetryFirmware:
+    """The MBB firmware revision each 0x51 / 0x52 / 0x53 entry of one FST/Gen3
+    file was written under, for the fields whose meaning changed between
+    revisions (the ambient scale and the flag bit maps, see
+    Gen2.telemetry_ambient and Gen2.telemetry_flag_map_is_shifted).
+
+    The header revision is the one at download time. The file's 0x4E
+    firmware-updated entries (payload 6 u16 previous revision, payload 8 u16
+    new revision, from John Myers' (atomicdog) Gen3 log format datasheet)
+    mark where it changed: an entry timestamped before an update was written
+    under that update's previous revision. Timestamps, not file positions,
+    order the entries, because the log is a ring buffer whose oldest entries
+    can sit after newer ones in the file.
+
+    It also records the earliest timestamp of an ambient reading that can
+    only be C x 100 (raw value outside Gen2.TELEMETRY_AMBIENT_PLAIN_RANGE,
+    scaled value plausible), and the timestamps of 0x4E updates to rev
+    18-19, for the rev 20+ rule in Gen2.telemetry_ambient."""
+
+    TELEMETRY_TYPES = {'0x51': 0x51, '0x52': 0x52, '0x53': 0x53}
+
+    def __init__(self, header_rev, updates=(), first_x100_timestamp=None):
+        self.header_rev = header_rev if isinstance(header_rev, int) else None
+        # (timestamp, previous revision, new revision), newest first
+        self.updates = sorted(((t, p, n) for t, p, n in updates if p != n), reverse=True)
+        self.first_x100_timestamp = first_x100_timestamp
+        self.plain_rev_update_times = [t for t, p, n in self.updates
+                                       if n in Gen2.TELEMETRY_AMBIENT_PLAIN_REVS]
+
+    def rev_at(self, timestamp):
+        rev = self.header_rev
+        for update_time, previous, _new in self.updates:
+            if timestamp < update_time:
+                rev = previous
+        return rev
+
+    def x100_seen_before(self, timestamp):
+        first = self.first_x100_timestamp
+        if first is None or first > timestamp:
+            return False
+        return not any(first <= t <= timestamp for t in self.plain_rev_update_times)
+
+    @classmethod
+    def _tag_offset(cls, message_type):
+        return 35 if message_type == 0x51 else Gen2.TELEMETRY_TIERS[message_type][2]
+
+    @classmethod
+    def _decoded_telemetry(cls, payload):
+        """(message_type, payload bytes) for an entry the 0x51 / 0x52 / 0x53
+        decoder accepted, else None."""
+        message_type = cls.TELEMETRY_TYPES.get(payload.get('message_type'))
+        structured = payload.get('structured_data')
+        if message_type is None or not structured or 'motor_controller_data_valid' not in structured:
+            return None
+        return message_type, bytearray.fromhex(structured['raw_hex'])
+
+    @classmethod
+    def from_entries(cls, header_rev, payloads):
+        updates = []
+        first_x100 = None
+        low, high = Gen2.TELEMETRY_AMBIENT_PLAIN_RANGE
+        plausible_low, plausible_high = Gen2.TELEMETRY_AMBIENT_PLAUSIBLE_C
+        for payload in payloads:
+            timestamp = payload.get('original_timestamp')
+            if timestamp is None:
+                continue
+            structured = payload.get('structured_data') or {}
+            if payload.get('message_type') == '0x4E' and payload.get('event') == 'Firmware Build Info' \
+                    and 'raw_hex' in structured:
+                x = bytes.fromhex(structured['raw_hex'])
+                updates.append((timestamp, BinaryTools.unpack('uint16', x, 6), BinaryTools.unpack('uint16', x, 8)))
+                continue
+            decoded = cls._decoded_telemetry(payload)
+            if decoded is None:
+                continue
+            message_type, x = decoded
+            raw = Gen2.telemetry_temperature(x, cls._tag_offset(message_type) + 9, 32768)
+            if raw is not None and not low <= raw <= high and plausible_low <= raw / 100.0 <= plausible_high:
+                if first_x100 is None or timestamp < first_x100:
+                    first_x100 = timestamp
+        return cls(header_rev, updates, first_x100)
+
+    @classmethod
+    def redecode(cls, collected_entries, header_rev):
+        """Decode the 0x51 / 0x52 / 0x53 entries of collected_entries
+        ((sort_timestamp, entry, entry_num) tuples from one file) again with
+        the file's firmware context, replacing event, conditions and
+        structured_data in place."""
+        payloads = [entry for _sort, entry, _num in collected_entries]
+        firmware = cls.from_entries(header_rev, payloads)
+        for entry in payloads:
+            decoded = cls._decoded_telemetry(entry)
+            if decoded is None:
+                continue
+            message_type, x = decoded
+            timestamp = entry['original_timestamp']
+            if message_type == 0x51:
+                result = Gen2.vehicle_state_telemetry(x, firmware=firmware, timestamp=timestamp)
+            else:
+                result = Gen2.vehicle_state_telemetry_tier(message_type, x, firmware=firmware, timestamp=timestamp)
+            entry['event'] = result['event']
+            entry['conditions'] = result['conditions']
+            entry['structured_data'] = result['structured_data']
+        return firmware
+
+
 class Gen3:
     entry_data_fencepost = b'\x00\xb2'
     Entry = namedtuple('Gen3EntryType', ['event', 'time', 'conditions', 'uninterpreted', 'log_level', 'message_type'])
@@ -4176,6 +4284,16 @@ class LogData(object):
                     except Exception as e:
                         logger.warning(f'Error parsing entry {entry_num}: {e}')
                         break
+
+            # FST/Gen3 MBB telemetry: some fields depend on the firmware
+            # revision each entry was written under, which needs the whole
+            # file (header revision, 0x4E updates), so those entries are
+            # decoded again once the walk is done. Not for BMS files, whose
+            # header revision is a BMS firmware revision.
+            if self.log_version == REV3 and dispatch_log_type != LogFile.log_type_bms \
+                    and not Gen2.is_paged_bms_format(self.entries):
+                Gen3TelemetryFirmware.redecode(collected_entries, self.header_info.get('Firmware rev.'))
+
 
             # Apply timestamp interpolation before sorting
             collected_entries = Gen2.interpolate_missing_timestamps(collected_entries, logger)
