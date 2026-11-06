@@ -722,50 +722,40 @@ the same four bytes as the motor, inverter and pack temperatures, read as unsign
 bytes (so -1 showed as 255 and flagged sensors as real readings). They are no longer
 emitted; use the named fields.
 
-### `0x54` (Type 84) - Sensor Data
-*Added in 2025+ firmware - supplementary sensor telemetry*
+### `0x54` (Type 84) - Torque Info
+*FST/Gen3 MBB, 22-byte payload*
 
-**Purpose**: Additional sensor readings and system status (152 entries per log session)
+Layout from John Myers' (atomicdog) Gen3 log format datasheet. Payload offset =
+datasheet offset + 6: the payload starts with the shared 6-byte prefix
+(sub-second microseconds, sequence, marker). All values are little-endian.
 
 Offset | Length | Contents
 ------ | :----: | --------
-0x00   | 22     | Sensor telemetry data (22 bytes total)
+0x00   | 4      | Sub-second, microseconds (u32), shown as `subsecond_us`
+0x04   | 1      | Sequence counter, shown as `sequence`
+0x05   | 1      | Marker byte, shown as `marker`
+0x06   | 4      | Torque, micro-Nm (s32), shown as `torque_nm` in Nm
+0x0A   | 4      | Torque demand, percent x 10 (s32), -1000..1000, negative = regen; shown as `torque_demand_percent`
+0x0E   | 4      | The datasheet's filtered motor power (s32). Not an instantaneous power in W: it is about 1% of pack V x I, climbs steadily through a ride and restarts near 0 on entering RUN. Shown raw as `filtered_motor_power_raw`, no unit
+0x12   | 4      | Discharge power limit, W (s32); -1 when the BMS is not active. Shown as `discharge_power_limit_watts` (null when -1) with `bms_power_limit_active`
 
-**Decoded structure (little-endian):**
-- Bytes 0-3: Odometer reading (meters)
-- Bytes 4-7: Sensor reading 1 (power/voltage related)
-- Bytes 8-11: Sensor reading 2 (system status)
-- Bytes 12-15: Sensor reading 3 (temperature/performance)
-- Bytes 16-19: Sensor reading 4 (motor/controller data)
-- Bytes 20-21: Status flags (uint16)
+Any other payload length, or a sub-second value above 1,000,000, falls back to the
+raw-hex report. 0x54 entries outside FST/Gen3 MBB files keep the older
+`sensor_data()` decoder.
 
-**Example JSON output:**
+**Example JSON output** (invented values):
 ```json
 {
-  "odometer_m": 689000,
-  "sensor_1": 429,
-  "sensor_2": 4278583296,
-  "sensor_3": 4390911,
-  "sensor_4": 1739784192,
-  "status": 1
+  "subsecond_us": 250000,
+  "sequence": 7,
+  "marker": 1,
+  "torque_nm": 87.654321,
+  "torque_demand_percent": 45.5,
+  "filtered_motor_power_raw": 12345,
+  "discharge_power_limit_watts": 61500,
+  "bms_power_limit_active": true
 }
 ```
-
-**Sensor Field Analysis (from multi-vehicle data):**
-
-Field | Value Range | Vehicle State Correlation | Interpretation
-------|-------------|---------------------------|---------------
-`sensor_1` | 200-4.2B | WSU/IB: low (200-600)<br>UN/TOP: high (millions) | Primary sensor, state-dependent
-`sensor_2` | 0-4.3B | WSU: always 0<br>HRG: very high<br>Mixed otherwise | Secondary sensor, 32-bit flags
-`sensor_3` | 0-57M | WSU: always 0<br>Others: variable | Tertiary sensor, temp/voltage?
-`sensor_4` | 0-4.29B | Frequently 4294901760 (0xFFF00000)<br>State-dependent variations | Status/flag register
-`status` | 0-65535 | 16-bit status register<br>Varies by vehicle and state | System status flags
-
-**Sensor Patterns by State:**
-- **WSU (Wakeup)**: sensor_2,3→0, sensor_4→max (clean startup)
-- **IB (In-motion)**: sensor_1→low, sensor_4→max (active operation) 
-- **HRG (Charging)**: sensor_1→low, sensor_2→high (charging mode)
-- **UN (Idle)**: High sensor values (monitoring/background)
 
 ### `0x52` / `0x53` (Types 82-83) - Vehicle State Telemetry
 
