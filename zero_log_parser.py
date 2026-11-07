@@ -3240,6 +3240,60 @@ class Gen2:
             'conditions': conditions  # Human-readable conditions with units
         }
 
+    # Entry type 0x54 in FST/Gen3 MBB files: torque info, 22 bytes. Layout
+    # from John Myers' (atomicdog) Gen3 log format datasheet; payload offset
+    # = datasheet offset + 6 (the shared prefix, see fst_entry_prefix). All
+    # four values are little-endian s32:
+    #    6  torque, micro-Nm
+    #   10  torque demand, percent x 10, -1000..1000, negative = regen
+    #   14  the datasheet's filtered_motor_power_w. Not an instantaneous
+    #       power: it is about 1% of pack V x I, climbs steadily through a
+    #       ride and restarts near 0 on entering RUN, so it is exposed raw
+    #       with no unit
+    #   18  discharge power limit, W; -1 when the BMS is not active
+    # Checked against the 0x51-0x53 telemetry entry of the same second:
+    # torque x omega / (pack V x pack I) has a median near 0.97 in RUN at
+    # rpm > 500 with pack V x I above 3 kW (motor efficiency, confirming the
+    # micro-Nm scale), torque is positive while driving and negative in
+    # regen, and the power limit is -1 in HIB and PWSU.
+    TORQUE_INFO_LENGTH = 22
+    TORQUE_INFO_POWER_LIMIT_INACTIVE = -1
+
+    @classmethod
+    def torque_info(cls, x):
+        """Type 0x54 - Torque Info (FST/Gen3 MBB, 22 bytes): see the
+        layout comment above. A payload that is not exactly 22 bytes, or
+        whose sub-second value is above FST_SUBSECOND_MAX_US, falls back to
+        the raw-hex report unhandled_entry_format() gives this type."""
+        if len(x) != cls.TORQUE_INFO_LENGTH:
+            return cls.unhandled_entry_format(0x54, x)
+        prefix = cls.fst_entry_prefix(x)
+        if prefix['subsecond_us'] > cls.FST_SUBSECOND_MAX_US:
+            return cls.unhandled_entry_format(0x54, x)
+
+        torque_unm = BinaryTools.unpack('int32', x, 6)
+        demand_x10 = BinaryTools.unpack('int32', x, 10)
+        filtered_power_raw = BinaryTools.unpack('int32', x, 14)
+        power_limit = BinaryTools.unpack('int32', x, 18)
+        limit_active = power_limit != cls.TORQUE_INFO_POWER_LIMIT_INACTIVE
+
+        structured_data = dict(prefix)
+        structured_data['torque_nm'] = torque_unm / 1e6
+        structured_data['torque_demand_percent'] = demand_x10 / 10
+        structured_data['filtered_motor_power_raw'] = filtered_power_raw
+        structured_data['discharge_power_limit_watts'] = power_limit if limit_active else None
+        structured_data['bms_power_limit_active'] = limit_active
+
+        limit_text = f"{power_limit} W" if limit_active else "BMS not active"
+        return {
+            'event': 'Torque Info',
+            'conditions': (f"Torque: {structured_data['torque_nm']} Nm, "
+                           f"Demand: {structured_data['torque_demand_percent']}%, "
+                           f"Filtered motor power (raw): {filtered_power_raw}, "
+                           f"Discharge power limit: {limit_text}"),
+            'structured_data': structured_data
+        }
+
     @classmethod
     def type_from_block(cls, unescaped_block):
         return BinaryTools.unpack('uint8', unescaped_block, 0x00)
@@ -3347,7 +3401,7 @@ class Gen2:
         }
 
     @classmethod
-    def _entry_parsers(cls, log_type=None):
+    def _entry_parsers(cls, log_type=None, rev3=False):
         """The message_type -> decoder dict parse_entry() dispatches through.
         Factored out (pure extraction, no behavior change) so
         collect_paged_bms_entries() can reuse the exact same dispatch table
@@ -3361,8 +3415,9 @@ class Gen2:
         'Unknown Type' - the existing, unchanged behavior for anything not
         confirmed MBB), and as the MBB firmware's own BMS Throt En/Re-
         enable Wire events only when log_type is definitely 'MBB'
-        (LogFile.log_type_mbb). Every other type id is unaffected by
-        log_type."""
+        (LogFile.log_type_mbb). rev3 is True for log_version REV3 files;
+        with it, 0x54 decodes as torque info unless log_type is BMS. Every
+        other type id is unaffected by log_type and rev3."""
         parsers = {
             # Unknown entry types to be added when defined: type, length, source, example
             0x01: cls.board_status,
@@ -3427,6 +3482,13 @@ class Gen2:
         if log_type == LogFile.log_type_mbb:
             parsers[0x10] = cls.mbb_throttle_enable_wire_disable
             parsers[0x11] = cls.mbb_throttle_enable_wire_reenable
+        if rev3 and log_type != LogFile.log_type_bms:
+            # FST/Gen3 MBB: 0x54 is torque info. Unknown Type is included
+            # because some FST/Gen3 MBB headers carry an escape byte before
+            # the "MBB" device name, which moves it off the offset
+            # LogFile.get_log_type() checks. No FST/Gen3 BMS file has been
+            # seen with a 0x54 entry. Every other file keeps sensor_data().
+            parsers[0x54] = cls.torque_info
         return parsers
 
     # The FST/Gen3 BMS page format (131,328-byte files; see
@@ -3671,7 +3733,8 @@ class Gen2:
         silently depending on a platform fact the other doesn't rely on.
         """
         n = len(buf)
-        parsers = cls._entry_parsers(log_type)
+        # This page format only occurs in log_version REV3 files.
+        parsers = cls._entry_parsers(log_type, rev3=True)
 
         # Pass 1: find every entry's (start, length) exactly as the normal
         # resync walk does - same header search, same zero-length handling
@@ -3772,7 +3835,7 @@ class Gen2:
         return collected
 
     @classmethod
-    def parse_entry(cls, log_data, address, unhandled, logger, timezone_offset=None, verbosity_level=1, log_type=None):
+    def parse_entry(cls, log_data, address, unhandled, logger, timezone_offset=None, verbosity_level=1, log_type=None, rev3=False):
         """
         Parse an individual entry from a LogFile into a human readable form
 
@@ -3812,7 +3875,7 @@ class Gen2:
         message_type = cls.type_from_block(unescaped_block)
         message = unescaped_block[0x05:]
 
-        parsers = cls._entry_parsers(log_type)
+        parsers = cls._entry_parsers(log_type, rev3=rev3)
         entry_parser = parsers.get(message_type)
         try:
             if entry_parser:
@@ -4243,7 +4306,8 @@ class LogData(object):
                                                                               0,  # unhandled counter
                                                                               timezone_offset=self.timezone_offset,
                                                                               logger=logger, verbosity_level=verbosity_level,
-                                                                              log_type=dispatch_log_type)
+                                                                              log_type=dispatch_log_type,
+                                                                              rev3=(self.log_version == REV3))
 
                         # Extract timestamp for sorting
                         time_str = entry_payload.get('time', '0')
