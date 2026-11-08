@@ -58,6 +58,13 @@ ZERO_TIME_FORMAT = '%Y-%m-%d %H:%M:%S'  # ISO format is more universal
 MBB_TIMESTAMP_GMT_OFFSET = -7 * 60 * 60
 
 
+class UnescapeError(ValueError):
+    """Raised by BinaryTools.unescape_block for a 0xfe 0x00 pair, which has no
+    decoded value under the escape rule (0xfe xor (next - 1)). Real logs carry
+    this pair only in damaged entries; the valid escape pairs are fe 01 (0xfe)
+    and fe 4d (0xb2)."""
+
+
 class MismatchingVinError(Exception):
     """Raised when attempting to merge LogData objects with different VINs"""
     def __init__(self, vin1, vin2):
@@ -378,6 +385,8 @@ class BinaryTools:
         while escape_offset != -1:
             escape_offset += start_offset
             if escape_offset + 1 < len(data):
+                if data[escape_offset + 1] == 0:
+                    raise UnescapeError(f'0xfe 0x00 pair at offset {escape_offset}')
                 data[escape_offset] = data[escape_offset] ^ data[escape_offset + 1] - 1
                 data = data[0:escape_offset + 1] + data[escape_offset + 2:]
             start_offset = escape_offset + 1
@@ -4281,6 +4290,20 @@ class LogData(object):
                             # so the walk cannot freeze here.
                             _next = self.entries.find(b'\xb2', _sync + 1)
                             read_pos = _next if _next > read_pos else read_pos + 1
+                    except UnescapeError as e:
+                        # A damaged entry holding a 0xfe 0x00 pair. Skip this one
+                        # entry and continue at the next one, the same step the
+                        # walk takes after a decoded entry. The paged BMS walker
+                        # skips such an entry the same way.
+                        # BMS logs still end the walk here: in classic BMS logs
+                        # that hold this pair, records past the damaged entry are
+                        # frequently misframed.
+                        if dispatch_log_type == LogFile.log_type_bms:
+                            logger.warning(f'Error parsing entry {entry_num}: {e}')
+                            break
+                        _sync = self.entries.find(b'\xb2', read_pos)
+                        logger.warning(f'Skipping entry {entry_num} at {_sync}: {e}')
+                        read_pos = _sync + self.entries[_sync + 1]
                     except Exception as e:
                         logger.warning(f'Error parsing entry {entry_num}: {e}')
                         break
