@@ -1377,6 +1377,19 @@ class Gen2:
         }
 
     @classmethod
+    def gen3_debug_message(cls, x):
+        """Type 0xFD on the FST path. The payload starts with the 6-byte entry
+        prefix (see fst_entry_prefix) and the NUL-terminated message follows
+        it, so the message is read from byte 6 and then handled exactly as
+        debug_message() handles legacy text. A payload whose first four bytes
+        are not a plausible sub-second value has no such prefix and goes to
+        debug_message() unchanged: legacy-platform ring-buffer logs are also
+        log_version REV3, and their 0xFD entries are plain text."""
+        if len(x) <= 6 or BinaryTools.unpack('uint32', x, 0) > cls.FST_SUBSECOND_MAX_US:
+            return cls.debug_message(x)
+        return cls.debug_message(x[6:])
+
+    @classmethod
     def debug_message(cls, x):
         # Extract the debug message string
         message = BinaryTools.unpack_str(x, 0x0, count=len(x) - 1)
@@ -3347,7 +3360,7 @@ class Gen2:
         }
 
     @classmethod
-    def _entry_parsers(cls, log_type=None):
+    def _entry_parsers(cls, log_type=None, rev3=False):
         """The message_type -> decoder dict parse_entry() dispatches through.
         Factored out (pure extraction, no behavior change) so
         collect_paged_bms_entries() can reuse the exact same dispatch table
@@ -3424,6 +3437,10 @@ class Gen2:
             0xfb: cls.mbb_system_information,   # Type 251
             0xfd: cls.debug_message
         }
+        if rev3:
+            # log_version REV3: on FST/Gen3 files the 0xFD payload starts with
+            # the 6-byte entry prefix, so the message is not at byte 0.
+            parsers[0xfd] = cls.gen3_debug_message
         if log_type == LogFile.log_type_mbb:
             parsers[0x10] = cls.mbb_throttle_enable_wire_disable
             parsers[0x11] = cls.mbb_throttle_enable_wire_reenable
@@ -3671,7 +3688,8 @@ class Gen2:
         silently depending on a platform fact the other doesn't rely on.
         """
         n = len(buf)
-        parsers = cls._entry_parsers(log_type)
+        # This page format only occurs in log_version REV3 files.
+        parsers = cls._entry_parsers(log_type, rev3=True)
 
         # Pass 1: find every entry's (start, length) exactly as the normal
         # resync walk does - same header search, same zero-length handling
@@ -3772,7 +3790,7 @@ class Gen2:
         return collected
 
     @classmethod
-    def parse_entry(cls, log_data, address, unhandled, logger, timezone_offset=None, verbosity_level=1, log_type=None):
+    def parse_entry(cls, log_data, address, unhandled, logger, timezone_offset=None, verbosity_level=1, log_type=None, rev3=False):
         """
         Parse an individual entry from a LogFile into a human readable form
 
@@ -3781,6 +3799,9 @@ class Gen2:
         firmwares both use for unrelated events - currently 0x10/0x11 -
         to the right decoder. Omitting it keeps the pre-existing,
         BMS-decoder behavior. See _entry_parsers().
+
+        rev3=True (set by LogData for log_version REV3) selects
+        gen3_debug_message() for type 0xFD.
         """
         try:
             header = log_data[address]
@@ -3812,7 +3833,7 @@ class Gen2:
         message_type = cls.type_from_block(unescaped_block)
         message = unescaped_block[0x05:]
 
-        parsers = cls._entry_parsers(log_type)
+        parsers = cls._entry_parsers(log_type, rev3=rev3)
         entry_parser = parsers.get(message_type)
         try:
             if entry_parser:
@@ -4243,7 +4264,8 @@ class LogData(object):
                                                                               0,  # unhandled counter
                                                                               timezone_offset=self.timezone_offset,
                                                                               logger=logger, verbosity_level=verbosity_level,
-                                                                              log_type=dispatch_log_type)
+                                                                              log_type=dispatch_log_type,
+                                                                              rev3=(self.log_version == REV3))
 
                         # Extract timestamp for sorting
                         time_str = entry_payload.get('time', '0')
