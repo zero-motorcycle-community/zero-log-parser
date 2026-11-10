@@ -2,9 +2,10 @@
 Tests for Gen3/FST 0xFD text entries.
 
 On FST/Gen3 files (log_version REV3) a 0xFD payload starts with the 6-byte entry
-prefix (u32 sub-second microseconds, u8 sequence counter, u8 marker) and the
-NUL-terminated message follows it. debug_message() reads from byte 0, so on
-those entries it showed the prefix bytes as one to three stray characters.
+prefix (u32 sub-second microseconds, u8 sequence counter, i8 UTC offset in
+hours) and the NUL-terminated message follows it. debug_message() reads from
+byte 0, so on those entries it showed the prefix bytes as one to three stray
+characters.
 gen3_debug_message() reads the message from byte 6. Plain-text payloads, which
 legacy-platform ring-buffer logs (also log_version REV3) send to it, are left to
 debug_message() unchanged.

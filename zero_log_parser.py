@@ -1379,13 +1379,14 @@ class Gen2:
     @classmethod
     def gen3_debug_message(cls, x):
         """Type 0xFD on the FST path. The payload starts with the 6-byte entry
-        prefix (see fst_entry_prefix) and the NUL-terminated message follows
+        prefix (see fst_entry_prefix: u32 sub-second microseconds, u8 sequence
+        counter, i8 UTC offset in hours) and the NUL-terminated message follows
         it, so the message is read from byte 6 and then handled exactly as
         debug_message() handles legacy text. A payload whose first four bytes
         are not a plausible sub-second value has no such prefix and goes to
         debug_message() unchanged: legacy-platform ring-buffer logs are also
         log_version REV3, and their 0xFD entries are plain text."""
-        if len(x) <= 6 or BinaryTools.unpack('uint32', x, 0) > cls.FST_SUBSECOND_MAX_US:
+        if len(x) <= 6 or cls.fst_entry_prefix(x)['subsecond_us'] > cls.FST_SUBSECOND_MAX_US:
             return cls.debug_message(x)
         return cls.debug_message(x[6:])
 
@@ -1945,8 +1946,10 @@ class Gen2:
         Byte 4 is a per-entry sequence counter (mod 256): in the FST/Gen3
         file set it increases by exactly 1 between 97.3% of adjacent entries
         in walk order (804,148 of 826,535 pairs), for entries of every type,
-        not only the ones decoded here. Byte 5 is a marker byte of
-        unidentified meaning (mostly 0xf9, 0x02, 0xfc, 0xfb, 0x01).
+        not only the ones decoded here. Byte 5 is the UTC offset in hours, a
+        signed 8-bit value (mostly 0xf9, 0x02, 0xfc, 0xfb, 0x01, that is -7,
+        +2, -4, -5 and +1). It is returned as read, unsigned, under the key
+        'marker'.
         """
         return {
             'subsecond_us': BinaryTools.unpack('uint32', x, 0x0),
