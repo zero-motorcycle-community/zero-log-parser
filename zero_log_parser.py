@@ -5142,8 +5142,13 @@ class LogData(object):
             write_line('{0:18} {1}'.format('Timezone', tz_str))
             write_line()
 
-            # Use centralized processing
-            processed_entries = self._collect_and_process_entries(logger, start_time, end_time)
+            # Use the entries processed when the log was loaded. With a time range
+            # the entries are collected again: _collect_and_process_entries keeps
+            # undated entries in a time range, _get_processed_entries drops them.
+            if self._processing_complete and not (start_time or end_time):
+                processed_entries = self._get_processed_entries()
+            else:
+                processed_entries = self._collect_and_process_entries(logger, start_time, end_time)
 
             write_line('Printing {0} of {0} log entries..'.format(len(processed_entries)))
             write_line()
