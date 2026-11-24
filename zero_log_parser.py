@@ -1899,24 +1899,6 @@ class Gen2:
     # 24-byte ASCII text entry of type 0x4F that passes every other check.
     FST_SUBSECOND_MAX_US = 1000000
 
-    # No entry of any type in the FST/Gen3 file set carries a sub-second value
-    # above this (the maximum seen is exactly 1,000,000), so a decoder that
-    # sees more is not looking at an FST entry. Two legacy BMS files hold a
-    # 24-byte ASCII text entry of type 0x4F that passes every other check.
-    FST_SUBSECOND_MAX_US = 1000000
-
-    # No entry of any type in the FST/Gen3 file set carries a sub-second value
-    # above this (the maximum seen is exactly 1,000,000), so a decoder that
-    # sees more is not looking at an FST entry. Two legacy BMS files hold a
-    # 24-byte ASCII text entry of type 0x4F that passes every other check.
-    FST_SUBSECOND_MAX_US = 1000000
-
-    # No entry of any type in the FST/Gen3 file set carries a sub-second value
-    # above this (the maximum seen is exactly 1,000,000), so a decoder that
-    # sees more is not looking at an FST entry. Two legacy BMS files hold a
-    # 24-byte ASCII text entry of type 0x4F that passes every other check.
-    FST_SUBSECOND_MAX_US = 1000000
-
     @classmethod
     def fst_entry_prefix(cls, x):
         """The 6-byte prefix at the start of every FST/Gen3 MBB entry payload
@@ -1974,14 +1956,6 @@ class Gen2:
         """
         record_bytes = len(x) - cls.CHARGER_RECORD_OFFSET
         if record_bytes < cls.CHARGER_RECORD_LEN or record_bytes % cls.CHARGER_RECORD_LEN:
-            return cls.unhandled_entry_format(0x48, x)
-
-        prefix = cls.fst_entry_prefix(x)
-        if prefix['subsecond_us'] > cls.FST_SUBSECOND_MAX_US:
-            return cls.unhandled_entry_format(0x48, x)
-
-        prefix = cls.fst_entry_prefix(x)
-        if prefix['subsecond_us'] > cls.FST_SUBSECOND_MAX_US:
             return cls.unhandled_entry_format(0x48, x)
 
         prefix = cls.fst_entry_prefix(x)
