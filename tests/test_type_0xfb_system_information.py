@@ -211,8 +211,9 @@ def _load_real_file(sample, filename):
 def test_real_coverage_gain_file_decodes_where_header_read_fails():
     lf, ld = _load_real_file(
         COVERAGE_GAIN_FILE, '538DZBZ84SC090001_MBB_SNUNINITIALIZED_2025-08-21_15-25-22_raw.bin')
-    # The existing fixed-offset header read gets nothing usable here.
-    assert ld.header_info['VIN'] != '538DZBZ84SC090001'
+    # The existing fixed-offset header read gets nothing usable here; the
+    # VIN shown is the file name's, labeled as such.
+    assert ld.vin_source == 'filename'
     assert ld.header_info['Board rev.'] == 'Unknown'
     # This decoder, reached through the real entry walker independent
     # of the header's own (failed) format detection, gets everything.

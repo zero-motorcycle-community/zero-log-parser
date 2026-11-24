@@ -131,7 +131,7 @@ def test_rev0_mbb():
         'vin': '538SM5Z26ECA03998', 'serial_number': '2014_mbb_0386e1_00603',
         'initial_date': 'Sep 22 2017 14:18:52', 'model': 'SS',
         'firmware_rev': 53, 'board_rev': 3,
-        'bms_serial_number': 'Unknown', 'pack_serial_number': 'Unknown'}
+        'bms_serial_number': 'Unknown', 'pack_serial_number': 'Unknown', 'vin_source': 'header'}
     _assert_matches_header(ld, j)
 
 
@@ -142,7 +142,7 @@ def test_rev1_mbb():
         'vin': '538SMCZ66HCG07739', 'serial_number': 'sj4216zer0653',
         'initial_date': 'Aug  9 2019 14:21:01', 'model': 'SR',
         'firmware_rev': 29, 'board_rev': 1956,
-        'bms_serial_number': 'Unknown', 'pack_serial_number': 'Unknown'}
+        'bms_serial_number': 'Unknown', 'pack_serial_number': 'Unknown', 'vin_source': 'header'}
     _assert_matches_header(ld, j)
 
 
@@ -153,7 +153,7 @@ def test_rev3_gen3_mbb():
         'vin': '538ZFAZ75LCK12639', 'serial_number': 'Unknown',
         'initial_date': 'Unknown', 'model': 'SRF',
         'firmware_rev': 14, 'board_rev': 2,
-        'bms_serial_number': 'Unknown', 'pack_serial_number': 'Unknown'}
+        'bms_serial_number': 'Unknown', 'pack_serial_number': 'Unknown', 'vin_source': 'header'}
     _assert_matches_header(ld, j)
 
 
@@ -164,16 +164,14 @@ def test_rev1_bms_serials_and_absent_keys():
         'vin': 'Unknown', 'serial_number': 'Unknown',
         'initial_date': 'Oct  5 2020 14:03:22', 'model': 'Unknown',
         'firmware_rev': 'Unknown', 'board_rev': 'Unknown',
-        'bms_serial_number': 'SJ0120ZER0405', 'pack_serial_number': '19tb1945'}
+        'bms_serial_number': 'SJ0120ZER0405', 'pack_serial_number': '19tb1945', 'vin_source': None}
     _assert_matches_header(ld, j)
 
 
-# metadata.log_type. It used to come only from the filename ('MBB' or 'Mbb'
-# in the path, else 'BMS'). It now uses LogFile.log_type (the MBB/BMS magic
-# string in the file itself, else a case-insensitive filename match) when
-# that is definite, and keeps the old filename test only when
-# LogFile.log_type is 'Unknown Type'. Real samples again, same encoding as
-# above; see analysis/json_emitter_fix.md, Addendum Part B.
+# metadata.log_type is LogFile.log_type, the value the text title shows (the
+# MBB/BMS magic string in the file itself, else a case-insensitive filename
+# match; for FST/Gen3 files the header entry's device name). Real samples
+# again, same encoding as above.
 
 # 538SDKZ49PCB22860_MbbD_2026-08-11.bin, first 0x400 bytes: the headerless
 # file whose entry stream is MBB types followed by a stretch of BMS types.
@@ -216,8 +214,8 @@ FST_ECUID = (
 )
 
 # 538SD4Z22DCB03041_MBB_2018-09-18.bin, first 0x400 bytes: printable junk
-# where the magic string would be, so LogFile.log_type is 'Unknown Type';
-# the filename test still applies and gives MBB.
+# where the magic string would be, so LogFile.log_type is 'Unknown Type',
+# and JSON says the same as the text title.
 MBB_JUNK_MAGIC = (
     'eNpbuHDhQq/SPAUFSwUjA0MzBUNTK2NzKwMThv9wAGZ2y85jAAEYrSzIwLCMi4HBmZGBYaO9'
     'JIM0DwvD7RsiDK4nGRg4Yhng4P95BgZ2IP1GWQzM12dIZ3AA0nPEIfK6DxdEg+hTbAwMqexI'
@@ -253,7 +251,7 @@ def test_log_type_fst_ecuid_file_uses_magic():
     assert j['metadata']['log_type'] == 'MBB'
 
 
-def test_log_type_unknown_magic_falls_back_to_filename():
+def test_log_type_unknown_magic_matches_text_title():
     ld, j = _json_for_named(MBB_JUNK_MAGIC, '538SD4Z22DCB03041_MBB_2018-09-18.bin')
     assert ld.log_file.log_type == 'Unknown Type'
-    assert j['metadata']['log_type'] == 'MBB'
+    assert j['metadata']['log_type'] == 'Unknown Type'
